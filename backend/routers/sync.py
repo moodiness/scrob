@@ -1486,6 +1486,20 @@ async def _get_connection_or_404(db: AsyncSession, connection_id: int, user_id: 
     return conn
 
 
+@router.get("/connection/{connection_id}/plex-friends")
+async def get_plex_friends(
+    connection_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    conn = await _get_connection_or_404(db, connection_id, current_user.id)
+    if conn.type != "plex":
+        raise HTTPException(status_code=400, detail="Connection is not a Plex server")
+    from core import plex as plex_client
+    friends = await plex_client.get_all_friends(conn.token)
+    return {"friends": friends}
+
+
 @router.get("/connection/{connection_id}/libraries")
 async def get_connection_libraries(
     connection_id: int,

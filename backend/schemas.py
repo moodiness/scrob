@@ -121,6 +121,10 @@ class MediaServerConnectionBase(BaseModel):
     push_watched: bool = False
     push_ratings: bool = False
     auto_sync_interval: Optional[int] = None
+    watchlist_to_radarr: bool = False
+    watchlist_to_sonarr: bool = False
+    watchlist_all_users: bool = False
+    watchlist_monitored_users: Optional[list[str]] = None
 
 
 class MediaServerConnectionCreate(MediaServerConnectionBase):
@@ -140,6 +144,10 @@ class MediaServerConnectionUpdate(BaseModel):
     push_watched: Optional[bool] = None
     push_ratings: Optional[bool] = None
     auto_sync_interval: Optional[int] = None
+    watchlist_to_radarr: Optional[bool] = None
+    watchlist_to_sonarr: Optional[bool] = None
+    watchlist_all_users: Optional[bool] = None
+    watchlist_monitored_users: Optional[list[str]] = None
 
 
 class MediaServerConnectionResponse(MediaServerConnectionBase):
