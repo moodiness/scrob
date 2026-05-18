@@ -10,7 +10,7 @@ const [settings, me, connections, scrobbleConnections] = await Promise.all([
   api.auth.getConnections(token!),
   api.auth.getScrobbleConnections(token!),
 ]);
-const hasTmdbKey = !!settings.tmdb_api_key;
+const hasTmdbKey = settings.has_effective_tmdb_key;
 const traktConfigured    = !!(settings.trakt_connected || settings.trakt_client_id);
 const radarrConfigured   = !!(settings.radarr_url && settings.radarr_token);
 const sonarrConfigured   = !!(settings.sonarr_url && settings.sonarr_token);
@@ -1778,6 +1778,8 @@ if (me.totp_enabled) {
               noPull
             );
             if (!ok) return;
+            // Show "queued" state immediately — don't wait for the first poll
+            renderConnProgress(connId, { status: 'pending', job_type: 'pull', processed_items: 0, total_items: 0, updated_at: new Date().toISOString() });
             url = `/api/proxy/sync/connection/${connId}`;
             syncConnId = connId;
           } else if (action === 'push_upstream') {
@@ -1945,6 +1947,7 @@ if (me.totp_enabled) {
             showMessage(data.message || 'Action successful!');
             if (syncConnId) startConnPoller(syncConnId);
           } else {
+            if (syncConnId) renderConnProgress(syncConnId, null);
             throw new Error(data.detail || 'Action failed');
           }
         } catch (e) {
@@ -2895,10 +2898,36 @@ if (me.totp_enabled) {
           </div>
         ` : '';
 
+        // Group episode warnings by series_name to avoid N identical rows for the same show.
+        // Non-episode warnings and episodes without a series_name are rendered individually.
+        const groupedEpisodeWarnings: Map<string, {count: number, reason: string}> = new Map();
+        const standaloneUnmatched: any[] = [];
+        for (const w of unmatchedWarnings) {
+          if (w.media_type === 'episode' && w.series_name) {
+            const existing = groupedEpisodeWarnings.get(w.series_name);
+            if (existing) {
+              existing.count++;
+            } else {
+              groupedEpisodeWarnings.set(w.series_name, { count: 1, reason: w.reason ?? 'unknown reason' });
+            }
+          } else {
+            standaloneUnmatched.push(w);
+          }
+        }
+
         const renderUnmatched = unmatchedWarnings.length > 0 ? `
           <div class="space-y-1 ${enrichmentWarnings.length > 0 ? 'mt-4 pt-4 border-t border-zinc-800/60' : ''}">
             <p class="text-xs text-zinc-500 mb-2">Items that couldn't be matched to TMDB:</p>
-            ${unmatchedWarnings.map((w: any) => `
+            ${[...groupedEpisodeWarnings.entries()].map(([seriesName, {count, reason}]) => `
+              <div class="flex flex-col gap-0.5 py-1.5 border-b border-zinc-800/60 last:border-0">
+                <div class="min-w-0">
+                  <span class="text-sm text-zinc-200 font-medium">${escapeHtml(seriesName)}</span>
+                  <span class="ml-2 text-xs text-zinc-600">${count} unmatched episode${count !== 1 ? 's' : ''}</span>
+                </div>
+                <span class="text-xs text-zinc-500">${escapeHtml(reason)}</span>
+              </div>
+            `).join('')}
+            ${standaloneUnmatched.map((w: any) => `
               <div class="flex flex-col gap-0.5 py-1.5 border-b border-zinc-800/60 last:border-0">
                 <div class="min-w-0">
                   <span class="text-sm text-zinc-200 font-medium">${escapeHtml(w.title)}</span>

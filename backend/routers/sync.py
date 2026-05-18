@@ -1,4 +1,5 @@
 import asyncio
+import re
 from fastapi import APIRouter, Depends, Query, HTTPException, BackgroundTasks
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -630,6 +631,20 @@ async def sync_items(
                 else:
                     show_id = show_map.get(str(parent_id)) if media_type == MediaType.episode else None
 
+                    # For Jellyfin/Emby episodes whose metadata scraping failed: the item title
+                    # is often the raw filename (e.g. "Show.Name.S02E01"). Try to salvage the
+                    # season/episode numbers from the filename so the item can be stored and
+                    # later enriched (or generate a Remap-capable enrichment warning) instead of
+                    # being silently skipped as unmatched.
+                    if (media_type == MediaType.episode and show_id and not tmdb_id
+                            and (season_num is None or episode_num is None)):
+                        _m = re.search(r'[Ss](\d+)[Ee](\d+)', name or '')
+                        if _m:
+                            if season_num is None:
+                                season_num = int(_m.group(1))
+                            if episode_num is None:
+                                episode_num = int(_m.group(2))
+
                     # Look up existing media from pre-loaded dicts (O(1), no DB query)
                     if media_type == MediaType.episode and show_id:
                         media = media_by_episode.get((show_id, season_num, episode_num))
@@ -683,10 +698,15 @@ async def sync_items(
                                     and season_num is not None
                                     and episode_num is not None
                                 ):
+                                    series_name = (
+                                        item.get("SeriesName") if source in (CollectionSource.jellyfin, CollectionSource.emby)
+                                        else item.get("grandparentTitle")
+                                    ) if media_type == MediaType.episode else None
                                     skipped_warnings.append({
                                         "title": name,
                                         "media_type": media_type.value,
                                         "source_id": source_id,
+                                        **({"series_name": series_name} if series_name else {}),
                                         "reason": "Unmatched on source — no TMDB ID available",
                                     })
                                     stats["skipped"] += 1
