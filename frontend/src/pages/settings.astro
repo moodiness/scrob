@@ -71,7 +71,13 @@ if (me.totp_enabled) {
                   </svg>
                 </button>
               </div>
-              <p class="text-xs text-zinc-500">Required for fetching metadata and posters. Will be validated before saving.</p>
+              {settings.has_global_tmdb_key && !settings.tmdb_api_key ? (
+                <p class="text-xs text-blue-400">A server-wide TMDB key is configured by your admin. You can leave this blank to use it, or enter your own key to override it.</p>
+              ) : settings.has_global_tmdb_key && settings.tmdb_api_key ? (
+                <p class="text-xs text-blue-400">A server-wide TMDB key is configured, but you are using your own key. Clear this field to fall back to the server key.</p>
+              ) : (
+                <p class="text-xs text-zinc-500">Required for fetching metadata and posters. Will be validated before saving.</p>
+              )}
             </div>
           </div>
 

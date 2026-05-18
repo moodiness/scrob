@@ -324,12 +324,10 @@ async def _settings_response(settings: UserSettings, db: AsyncSession) -> schema
     """Build a UserSettings schema response, injecting computed fields."""
     data = schemas.UserSettings.model_validate(settings)
     data.trakt_connected = bool(settings.trakt_access_token)
-    if not settings.tmdb_api_key:
-        gs_result = await db.execute(select(GlobalSettings).where(GlobalSettings.id == 1))
-        gs = gs_result.scalar_one_or_none()
-        data.has_effective_tmdb_key = bool(gs and gs.tmdb_api_key)
-    else:
-        data.has_effective_tmdb_key = True
+    gs_result = await db.execute(select(GlobalSettings).where(GlobalSettings.id == 1))
+    gs = gs_result.scalar_one_or_none()
+    data.has_global_tmdb_key = bool(gs and gs.tmdb_api_key)
+    data.has_effective_tmdb_key = bool(settings.tmdb_api_key) or data.has_global_tmdb_key
     return data
 
 

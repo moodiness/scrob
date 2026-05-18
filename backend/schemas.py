@@ -72,6 +72,7 @@ class TotpBackupCodesResponse(BaseModel):
 class UserSettings(BaseModel):
     tmdb_api_key: Optional[str] = None
     has_effective_tmdb_key: bool = False
+    has_global_tmdb_key: bool = False
 
     # Radarr integration
     radarr_url: Optional[str] = None

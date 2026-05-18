@@ -356,6 +356,7 @@ export interface UserPreferences {
 export interface UserSettings {
   tmdb_api_key: string | null;
   has_effective_tmdb_key: boolean;
+  has_global_tmdb_key: boolean;
 
   radarr_url: string | null;
   radarr_token: string | null;
