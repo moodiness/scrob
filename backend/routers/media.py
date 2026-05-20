@@ -678,6 +678,7 @@ async def search_media(
     type: str | None = Query(None),
     year: int | None = Query(None),
     page: int = Query(1, ge=1),
+    in_library: bool = Query(False),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -761,6 +762,37 @@ async def search_media(
         for item in formatted:
             item["in_library"] = True
         return {"page": 1, "total_pages": 1, "total_results": len(formatted), "results": formatted}
+
+    # Collection-only filter: search local DB, skip TMDB entirely
+    if in_library:
+        PAGE_SIZE = 24
+        lib_q = (
+            select(Media)
+            .options(joinedload(Media.show))
+            .join(Collection, Collection.media_id == Media.id)
+            .where(
+                Collection.user_id == current_user.id,
+                or_(Media.title.ilike(f"%{q}%"), Media.original_title.ilike(f"%{q}%")),
+            )
+        )
+        if type and type in {m.value for m in MediaType}:
+            lib_q = lib_q.where(Media.media_type == type)
+        else:
+            lib_q = lib_q.where(Media.media_type != MediaType.episode)
+        count_result = await db.execute(select(func.count()).select_from(lib_q.subquery()))
+        total = count_result.scalar_one()
+        lib_q = lib_q.order_by(Media.title).offset((page - 1) * PAGE_SIZE).limit(PAGE_SIZE)
+        items_result = await db.execute(lib_q)
+        items = items_result.scalars().all()
+        formatted = [format_media(m) for m in items]
+        for item in formatted:
+            item["in_library"] = True
+        return {
+            "page": page,
+            "total_pages": max(1, (total + PAGE_SIZE - 1) // PAGE_SIZE),
+            "total_results": total,
+            "results": formatted,
+        }
 
     tmdb_key = await get_user_tmdb_key(db, current_user.id)
 

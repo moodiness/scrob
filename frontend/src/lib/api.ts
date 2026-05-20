@@ -875,8 +875,8 @@ export const api = {
     tmdbList: (params: { type: string; category?: string; page?: number; genre?: string; year?: number; min_rating?: number; status?: string }, token?: string) =>
       get<{ results: MediaItem[]; page: number; total_pages: number; total_results: number }>("/media/tmdb/list", params, token),
 
-    search: (q: string, type?: string, page: number = 1, year?: number, token?: string) =>
-      get<{ results: MediaItem[]; page: number; total_pages: number; total_results: number }>("/media/search", { q, ...(type ? { type } : {}), page, ...(year ? { year } : {}) }, token),
+    search: (q: string, type?: string, page: number = 1, year?: number, token?: string, inLibrary?: boolean) =>
+      get<{ results: MediaItem[]; page: number; total_pages: number; total_results: number }>("/media/search", { q, ...(type ? { type } : {}), page, ...(year ? { year } : {}), ...(inLibrary ? { in_library: true } : {}) }, token),
 
     recentlyAdded: (type?: string, token?: string) =>
       get<{ results: MediaItem[] }>("/media/recently-added", type ? { type } : {}, token),
