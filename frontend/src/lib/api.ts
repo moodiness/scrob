@@ -365,6 +365,7 @@ export interface UserPreferences {
   country: string | null;
   movie_genres: string[];
   show_genres: string[];
+  disliked_genres: string[];
   streaming_services: string[];
   content_language: string | null;
   privacy_level: PrivacyLevel;

@@ -1,4 +1,4 @@
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel, EmailStr, field_validator
 from typing import Optional
 from datetime import datetime
 from models.base import UserRole, MediaType, PrivacyLevel
@@ -226,6 +226,7 @@ class UserProfileUpdate(BaseModel):
     country: Optional[str] = None
     movie_genres: Optional[list[str]] = None
     show_genres: Optional[list[str]] = None
+    disliked_genres: Optional[list[str]] = None
     streaming_services: Optional[list[str]] = None
     content_language: Optional[str] = None
     privacy_level: Optional[PrivacyLevel] = None
@@ -236,10 +237,16 @@ class UserProfileResponse(BaseModel):
     country: Optional[str] = None
     movie_genres: list[str] = []
     show_genres: list[str] = []
+    disliked_genres: list[str] = []
     streaming_services: list[str] = []
     content_language: Optional[str] = None
     privacy_level: PrivacyLevel = PrivacyLevel.private
     avatar_url: Optional[str] = None
+
+    @field_validator('movie_genres', 'show_genres', 'disliked_genres', 'streaming_services', mode='before')
+    @classmethod
+    def _none_to_list(cls, v: object) -> list:
+        return v if v is not None else []
 
     class Config:
         from_attributes = True

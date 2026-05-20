@@ -60,6 +60,48 @@ TV_GENRE_IDS: dict[str, int] = {
     "War & Politics": 10768, "Western": 37,
 }
 
+MOVIE_GENRE_NAMES: dict[int, str] = {v: k for k, v in MOVIE_GENRE_IDS.items()}
+TV_GENRE_NAMES: dict[int, str] = {v: k for k, v in TV_GENRE_IDS.items()}
+
+
+def _genre_weight(genre_ids: list[int], liked: set[str], disliked: set[str], name_map: dict[int, str]) -> float:
+    """Weighted random score for an item based on user genre preferences.
+
+    Liked genres add +2, disliked genres subtract 1.5.  Items with only
+    disliked genres get a near-zero weight; mixed items can still surface.
+    """
+    if not liked and not disliked:
+        return 1.0
+    score = 1.0
+    for gid in genre_ids:
+        name = name_map.get(gid)
+        if name in liked:
+            score += 2.0
+        elif name in disliked:
+            score -= 1.5
+    return max(0.05, score)
+
+
+def _filter_disliked(
+    results: list[dict],
+    disliked: set[str],
+    liked: set[str],
+    name_map: dict[int, str],
+) -> list[dict]:
+    """Drop items whose only genres are disliked and none are liked."""
+    if not disliked:
+        return results
+    out = []
+    for r in results:
+        gids = r.get("genre_ids", [])
+        names = {name_map.get(gid) for gid in gids} - {None}
+        has_liked = bool(names & liked)
+        has_only_disliked = bool(names) and names <= disliked
+        if not has_only_disliked or has_liked:
+            out.append(r)
+    return out
+
+
 TV_STATUS_IDS: dict[str, int] = {
     "Returning Series": 0, "Planned": 1, "In Production": 2,
     "Ended": 3, "Canceled": 4,
@@ -1863,6 +1905,7 @@ async def for_you(
 
     movie_genres = profile.movie_genres or []
     show_genres = profile.show_genres or []
+    disliked_genres: set[str] = set(profile.disliked_genres or [])
     language: str | None = getattr(profile, "content_language", None)
 
     if not movie_genres and not show_genres:
@@ -1912,9 +1955,12 @@ async def for_you(
         else:
             show_raw.extend(raw)
 
+    movie_liked_set = set(movie_genres)
+    show_liked_set = set(show_genres)
+
     seen: set[int] = set()
     unique_movies: list[dict] = []
-    for r in movie_raw:
+    for r in _filter_disliked(movie_raw, disliked_genres, movie_liked_set, MOVIE_GENRE_NAMES):
         rid = r.get("id")
         if rid and rid not in seen:
             seen.add(rid)
@@ -1922,7 +1968,7 @@ async def for_you(
 
     seen2: set[int] = set()
     unique_shows: list[dict] = []
-    for r in show_raw:
+    for r in _filter_disliked(show_raw, disliked_genres, show_liked_set, TV_GENRE_NAMES):
         rid = r.get("id")
         if rid and rid not in seen2:
             seen2.add(rid)
@@ -2013,9 +2059,16 @@ async def recommended(
     current_user: User = Depends(get_current_user),
 ):
     import random
+    from models.profile import UserProfileData
     tmdb_key = await get_user_tmdb_key(db, current_user.id)
     if not check_tmdb_key(tmdb_key):
         return {"results": []}
+
+    profile_q = await db.execute(select(UserProfileData).where(UserProfileData.user_id == current_user.id))
+    _rec_profile = profile_q.scalar_one_or_none()
+    _rec_disliked: set[str] = set(_rec_profile.disliked_genres or []) if _rec_profile else set()
+    _rec_movie_liked: set[str] = set(_rec_profile.movie_genres or []) if _rec_profile else set()
+    _rec_show_liked: set[str] = set(_rec_profile.show_genres or []) if _rec_profile else set()
 
     # Bulk-load all collected IDs for filtering later
     all_movie_ids_q = await db.execute(
@@ -2086,7 +2139,10 @@ async def recommended(
 
     for i, batch in enumerate(all_results):
         is_show = i >= n_movies
-        for item in batch:
+        name_map = TV_GENRE_NAMES if is_show else MOVIE_GENRE_NAMES
+        liked_set = _rec_show_liked if is_show else _rec_movie_liked
+        filtered_batch = _filter_disliked(batch, _rec_disliked, liked_set, name_map)
+        for item in filtered_batch:
             tmdb_id = item.get("id")
             if not tmdb_id or tmdb_id in seen:
                 continue
@@ -3951,6 +4007,7 @@ async def pick_for_me(
     # ── Streaming pool (progressive fallback) ─────────────────────────────
     streaming_candidates: list[dict] = []
     if streaming_ids and check_tmdb_key(tmdb_key):
+        disliked: set[str] = set(profile.disliked_genres or []) if profile else set()
         user_genres = ((profile.movie_genres if type == "movie" else profile.show_genres) or []) if profile else []
         genre_map = MOVIE_GENRE_IDS if type == "movie" else TV_GENRE_IDS
         genre_ids = [genre_map[g] for g in user_genres if g in genre_map]
@@ -4019,7 +4076,21 @@ async def pick_for_me(
     if not all_candidates:
         raise HTTPException(status_code=404, detail="no_results")
 
-    pick = random.choice(all_candidates)
+    liked_set = set(user_genres)
+    if disliked or liked_set:
+        weights = []
+        for item in all_candidates:
+            item_genres: list[str] = item.get("genres") or []
+            score = 1.0
+            for g in item_genres:
+                if g in liked_set:
+                    score += 2.0
+                elif g in disliked:
+                    score -= 1.5
+            weights.append(max(0.05, score))
+        pick = random.choices(all_candidates, weights=weights, k=1)[0]
+    else:
+        pick = random.choice(all_candidates)
 
     # ── Fetch genres from local DB for the picked item ─────────────────────
     if not pick.get("genres"):

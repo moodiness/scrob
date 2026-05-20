@@ -630,13 +630,15 @@ function skeletonWide() {
     }
 
     function sourceLabel(src) {
-      const icons = { plex: '🟡', jellyfin: '🟣', emby: '🟢' };
-      const names = { plex: 'Plex', jellyfin: 'Jellyfin', emby: 'Emby' };
-      if (src.type === 'media_server') {
-        const icon = icons[src.name] || '💾';
-        return `<span class="inline-flex items-center gap-1.5 px-3 py-1.5 bg-zinc-800 border border-zinc-700 rounded-lg text-sm font-medium text-zinc-200">${icon} Watch on ${names[src.name] || src.name}</span>`;
+      let logoHtml;
+      if (src.logo) {
+        logoHtml = `<img src="${esc(src.logo)}" alt="" class="w-5 h-5 rounded object-contain" />`;
+      } else if (src.type === 'plex' || src.type === 'jellyfin' || src.type === 'emby') {
+        logoHtml = `<img src="/icons/${esc(src.type)}.svg" alt="" class="w-5 h-5 rounded object-contain" />`;
+      } else {
+        logoHtml = '<span class="text-zinc-400 text-xs">▶</span>';
       }
-      return `<span class="inline-flex items-center gap-1.5 px-3 py-1.5 bg-zinc-800 border border-zinc-700 rounded-lg text-sm font-medium text-zinc-200">▶ ${esc(src.name)}</span>`;
+      return `<span class="inline-flex items-center gap-1.5 px-3 py-1.5 bg-zinc-800 border border-zinc-700 rounded-lg text-sm font-medium text-zinc-200">${logoHtml} ${esc(src.name)}</span>`;
     }
 
     function showResult(data) {

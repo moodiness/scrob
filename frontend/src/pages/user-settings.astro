@@ -15,6 +15,7 @@ const prefs: UserPreferences = {
   country: null,
   movie_genres: [],
   show_genres: [],
+  disliked_genres: [],
   streaming_services: [],
   content_language: null,
   privacy_level: "private",
@@ -54,6 +55,8 @@ const SHOW_GENRES = [
   "Reality","Sci-Fi & Fantasy","Soap","Talk",
   "War & Politics","Western",
 ];
+
+const ALL_GENRES = [...new Set([...MOVIE_GENRES, ...SHOW_GENRES])].sort();
 
 const STREAMING_SERVICES = [
   { id: "8",    name: "Netflix" },
@@ -306,6 +309,31 @@ const COUNTRIES = [
         </div>
       </section>
 
+      <!-- Disliked Genres -->
+      <section>
+        <div class="mb-4 border-b border-zinc-800 pb-2">
+          <h2 class="text-xl font-semibold text-zinc-100">Disliked Genres</h2>
+        </div>
+        <p class="text-sm text-zinc-400 mb-4">
+          Genres you want to avoid. Items that <em>only</em> have disliked genres are filtered out of recommendations and picks. Mixed items (some liked, some disliked) can still appear. A genre can't be in both lists — selecting one here removes it from your favourites.
+        </p>
+        <div id="disliked-genre-chips" class="flex flex-wrap gap-2">
+          {ALL_GENRES.map((genre) => {
+            const active = prefs.disliked_genres.includes(genre);
+            return (
+              <button
+                type="button"
+                data-chip="disliked-genre"
+                data-value={genre}
+                class={`chip px-5 py-3 rounded-full border text-base font-medium transition-all cursor-pointer active:scale-95 active:opacity-70 ${active ? "bg-red-500/20 border-red-500 text-red-400" : "bg-zinc-900 border-zinc-700 text-zinc-400 hover:border-zinc-500 hover:text-zinc-200"}`}
+              >
+                {genre}
+              </button>
+            );
+          })}
+        </div>
+      </section>
+
       <!-- Save -->
       <div class="pt-6 pb-8">
         <button
@@ -411,16 +439,43 @@ const COUNTRIES = [
       }
     });
 
-    // Chip toggle
+    const ACTIVE_BLUE = 'bg-blue-500/20 border-blue-500 text-blue-400';
+    const ACTIVE_RED  = 'bg-red-500/20 border-red-500 text-red-400';
+    const INACTIVE    = 'bg-zinc-900 border-zinc-700 text-zinc-400 hover:border-zinc-500 hover:text-zinc-200';
+
+    function setChipActive(btn: HTMLButtonElement, active: boolean, isDislike = false) {
+      const activeClass = isDislike ? ACTIVE_RED : ACTIVE_BLUE;
+      btn.className = btn.className
+        .replace(ACTIVE_BLUE, INACTIVE).replace(ACTIVE_RED, INACTIVE)
+        .replace(INACTIVE, active ? activeClass : INACTIVE);
+      // Normalise: remove duplicates that can appear from chained replaces
+      if (active) {
+        btn.classList.remove(...INACTIVE.split(' '));
+        btn.classList.add(...activeClass.split(' '));
+      } else {
+        btn.classList.remove(...ACTIVE_BLUE.split(' '), ...ACTIVE_RED.split(' '));
+        btn.classList.add(...INACTIVE.split(' '));
+      }
+    }
+
+    // Chip toggle with mutual exclusivity between liked and disliked
     document.querySelectorAll<HTMLButtonElement>('button[data-chip]').forEach(btn => {
       btn.addEventListener('click', () => {
-        const isActive = btn.classList.contains('bg-blue-500/20');
-        if (isActive) {
-          btn.className = btn.className
-            .replace('bg-blue-500/20 border-blue-500 text-blue-400', 'bg-zinc-900 border-zinc-700 text-zinc-400 hover:border-zinc-500 hover:text-zinc-200');
-        } else {
-          btn.className = btn.className
-            .replace('bg-zinc-900 border-zinc-700 text-zinc-400 hover:border-zinc-500 hover:text-zinc-200', 'bg-blue-500/20 border-blue-500 text-blue-400');
+        const group = btn.dataset.chip!;
+        const value = btn.dataset.value!;
+        const isDislike = group === 'disliked-genre';
+        const isActive = btn.classList.contains(isDislike ? 'bg-red-500/20' : 'bg-blue-500/20');
+
+        setChipActive(btn, !isActive, isDislike);
+
+        // Mutual exclusivity: remove the same genre from the opposite liked/disliked list
+        if (!isActive && (group === 'disliked-genre' || group === 'movie-genre' || group === 'show-genre')) {
+          const oppositeGroups = isDislike ? ['movie-genre', 'show-genre'] : ['disliked-genre'];
+          for (const og of oppositeGroups) {
+            document.querySelectorAll<HTMLButtonElement>(`button[data-chip="${og}"][data-value="${value}"]`).forEach(other => {
+              setChipActive(other, false, og === 'disliked-genre');
+            });
+          }
         }
       });
     });
@@ -457,9 +512,11 @@ const COUNTRIES = [
       const country = (document.getElementById('country') as HTMLSelectElement | null)?.value ?? '';
       const contentLanguage = (document.getElementById('content_language') as HTMLSelectElement | null)?.value ?? '';
 
-      const activeChips = (group: string) =>
-        Array.from(document.querySelectorAll<HTMLButtonElement>(`button[data-chip="${group}"].bg-blue-500\\/20`))
+      const activeChips = (group: string) => {
+        const activeClass = group === 'disliked-genre' ? 'bg-red-500\\/20' : 'bg-blue-500\\/20';
+        return Array.from(document.querySelectorAll<HTMLButtonElement>(`button[data-chip="${group}"].${activeClass}`))
           .map(b => b.dataset.value ?? '');
+      };
 
       try {
         const res = await fetch('/api/proxy/profile/me', {
@@ -477,6 +534,7 @@ const COUNTRIES = [
             streaming_services: activeChips('streaming'),
             movie_genres: activeChips('movie-genre'),
             show_genres: activeChips('show-genre'),
+            disliked_genres: activeChips('disliked-genre'),
           }),
         });
         if (!res.ok) {
