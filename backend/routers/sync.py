@@ -311,19 +311,23 @@ async def _fan_out_changes_to_other_connections(
     push_tasks = []
 
     if push_candidates:
-        files_result = await db.execute(
-            select(CollectionFile.source_id, CollectionFile.source, Collection.media_id)
-            .join(Collection, Collection.id == CollectionFile.collection_id)
-            .where(
-                Collection.user_id == user_id,
-                Collection.media_id.in_(all_changed_ids),
-                CollectionFile.source_id.isnot(None),
-            )
-        )
-        # (source_type, media_id) → [source_id]
+        # Chunk the IN clause to stay under asyncpg's 32767-parameter limit.
+        # A large first-time sync can produce tens of thousands of changed IDs.
         source_ids_map: dict[tuple[CollectionSource, int], list[str]] = {}
-        for source_id, source_type, media_id in files_result.all():
-            source_ids_map.setdefault((source_type, media_id), []).append(source_id)
+        all_changed_list = list(all_changed_ids)
+        for i in range(0, len(all_changed_list), _MAX_IN_PARAMS):
+            chunk = all_changed_list[i : i + _MAX_IN_PARAMS]
+            files_result = await db.execute(
+                select(CollectionFile.source_id, CollectionFile.source, Collection.media_id)
+                .join(Collection, Collection.id == CollectionFile.collection_id)
+                .where(
+                    Collection.user_id == user_id,
+                    Collection.media_id.in_(chunk),
+                    CollectionFile.source_id.isnot(None),
+                )
+            )
+            for source_id, source_type, media_id in files_result.all():
+                source_ids_map.setdefault((source_type, media_id), []).append(source_id)
 
         import httpx as _httpx
         sem = asyncio.Semaphore(20)
@@ -358,18 +362,23 @@ async def _fan_out_changes_to_other_connections(
     push_trakt_ratings = settings and settings.trakt_push_ratings and settings.trakt_access_token and settings.trakt_client_id
 
     if (push_trakt_watched or push_trakt_ratings) and all_changed_ids:
-        media_res = await db.execute(
-            select(Media).where(Media.id.in_(all_changed_ids))
+        media_items = await _select_in_chunks(
+            db,
+            lambda chunk: select(Media).where(Media.id.in_(chunk)),
+            list(all_changed_ids),
         )
-        media_items = media_res.scalars().all()
         media_by_id: dict[int, Media] = {m.id: m for m in media_items}
 
         # Load shows for episode tmdb_id lookups
         show_ids = {m.show_id for m in media_items if m.show_id}
         shows_by_id: dict[int, "Show"] = {}
         if show_ids:
-            shows_res = await db.execute(select(Show).where(Show.id.in_(show_ids)))
-            shows_by_id = {s.id: s for s in shows_res.scalars().all()}
+            shows_list = await _select_in_chunks(
+                db,
+                lambda chunk: select(Show).where(Show.id.in_(chunk)),
+                list(show_ids),
+            )
+            shows_by_id = {s.id: s for s in shows_list}
 
         trakt_history_movies: list[int] = []
         trakt_history_episodes: list[tuple[int, int, int]] = []
