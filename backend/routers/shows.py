@@ -323,7 +323,7 @@ async def get_show(
                 "user_rating": season_ratings.get(sn),
             }
 
-        # Enhance seasons_meta with TMDB season IDs and ratings from the live TMDB call
+        # Enhance seasons_meta with live TMDB data (id, rating, overview, air_date)
         tmdb_season_map: dict = {}
         if tmdb_extra:
             tmdb_season_map = {s["season_number"]: s for s in tmdb_extra.get("seasons", [])}
@@ -333,6 +333,9 @@ async def get_show(
                 **s,
                 "tmdb_season_id": tmdb_season_map.get(s["season_number"], {}).get("id"),
                 "tmdb_rating": tmdb_season_map.get(s["season_number"], {}).get("vote_average"),
+                # Fill overview/air_date from live TMDB if not stored in DB
+                "overview": s.get("overview") or tmdb_season_map.get(s["season_number"], {}).get("overview"),
+                "air_date": s.get("air_date") or tmdb_season_map.get(s["season_number"], {}).get("air_date"),
             }
             for s in base_seasons_meta
         ]

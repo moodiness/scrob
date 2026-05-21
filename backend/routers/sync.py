@@ -164,6 +164,8 @@ async def sync_shows_batch(
                             "poster_path": tmdb.poster_url(s.get("poster_path")),
                             "episode_count": s["episode_count"],
                             "name": s["name"],
+                            "overview": s.get("overview"),
+                            "air_date": s.get("air_date"),
                         }
                         for s in d.get("seasons", [])
                     ],
