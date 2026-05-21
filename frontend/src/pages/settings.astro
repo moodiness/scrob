@@ -37,19 +37,14 @@ if (me.totp_enabled) {
       <section>
         <div class="flex items-center justify-between mb-4 border-b border-zinc-800 pb-2">
           <h2 class="text-xl font-semibold text-zinc-100">General</h2>
-          <button
-            type="button"
-            data-action="test_tmdb"
-            class="js-action-btn text-sm bg-zinc-800 hover:bg-zinc-700 text-zinc-300 border border-zinc-700 px-4 py-2.5 rounded-lg transition-colors cursor-pointer disabled:opacity-50"
-          >
-            Test Key
-          </button>
         </div>
         <form id="settings-form" class="space-y-6">
-          <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
-            <div class="space-y-2">
-              <label for="tmdb_api_key" class="block text-sm font-medium text-zinc-400">TMDB API Key</label>
-              <div class="relative group/field">
+          <div class="space-y-6 max-w-xl">
+          <!-- TMDB API Key -->
+          <div class="space-y-2">
+            <label for="tmdb_api_key" class="block text-sm font-medium text-zinc-400">TMDB API Key</label>
+            <div class="flex gap-2">
+              <div class="relative flex-1 group/field">
                 <input
                   type="password"
                   name="tmdb_api_key"
@@ -71,19 +66,31 @@ if (me.totp_enabled) {
                   </svg>
                 </button>
               </div>
-              {settings.has_global_tmdb_key && !settings.tmdb_api_key ? (
-                <p class="text-xs text-blue-400">A server-wide TMDB key is configured by your admin. You can leave this blank to use it, or enter your own key to override it.</p>
-              ) : settings.has_global_tmdb_key && settings.tmdb_api_key ? (
-                <p class="text-xs text-blue-400">A server-wide TMDB key is configured, but you are using your own key. Clear this field to fall back to the server key.</p>
-              ) : (
-                <p class="text-xs text-zinc-500">Required for fetching metadata and posters. Will be validated before saving.</p>
-              )}
+              <button
+                type="button"
+                data-action="test_tmdb"
+                title="Test TMDB key"
+                class="js-action-btn px-3 py-2 bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 text-zinc-300 rounded-lg transition-colors cursor-pointer disabled:opacity-50"
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="w-5 h-5">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M5.25 5.653c0-.856.917-1.398 1.667-.986l11.54 6.347a1.125 1.125 0 010 1.972l-11.54 6.347a1.125 1.125 0 01-1.667-.986V5.653z" />
+                </svg>
+              </button>
             </div>
+            {settings.has_global_tmdb_key && !settings.tmdb_api_key ? (
+              <p class="text-xs text-blue-400">A server-wide TMDB key is configured by your admin. You can leave this blank to use it, or enter your own key to override it.</p>
+            ) : settings.has_global_tmdb_key && settings.tmdb_api_key ? (
+              <p class="text-xs text-blue-400">A server-wide TMDB key is configured, but you are using your own key. Clear this field to fall back to the server key.</p>
+            ) : (
+              <p class="text-xs text-zinc-500">Required for fetching metadata and posters. Will be validated before saving.</p>
+            )}
+          </div>
 
-            <!-- TVDB key -->
-            <div class="space-y-2">
-              <label for="tvdb_api_key" class="block text-sm font-medium text-zinc-400">TVDB API Key</label>
-              <div class="relative group/field">
+          <!-- TVDB API Key -->
+          <div class="space-y-2">
+            <label for="tvdb_api_key" class="block text-sm font-medium text-zinc-400">TVDB API Key</label>
+            <div class="flex gap-2">
+              <div class="relative flex-1 group/field">
                 <input
                   type="password"
                   name="tvdb_api_key"
@@ -106,14 +113,25 @@ if (me.totp_enabled) {
                   </svg>
                 </button>
               </div>
-              {settings.has_global_tvdb_key && !settings.tvdb_api_key ? (
-                <p class="text-xs text-blue-400">A server-wide TVDB key is configured by your admin.</p>
-              ) : settings.has_global_tvdb_key && settings.tvdb_api_key ? (
-                <p class="text-xs text-blue-400">A server-wide TVDB key is configured, but you are using your own key.</p>
-              ) : (
-                <p class="text-xs text-zinc-500">Required for TVDB-sourced shows (shows not on TMDB). Get your key at thetvdb.com.</p>
-              )}
+              <button
+                type="button"
+                data-action="test_tvdb"
+                title="Test TVDB key"
+                class="js-action-btn px-3 py-2 bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 text-zinc-300 rounded-lg transition-colors cursor-pointer disabled:opacity-50"
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="w-5 h-5">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M5.25 5.653c0-.856.917-1.398 1.667-.986l11.54 6.347a1.125 1.125 0 010 1.972l-11.54 6.347a1.125 1.125 0 01-1.667-.986V5.653z" />
+                </svg>
+              </button>
             </div>
+            {settings.has_global_tvdb_key && !settings.tvdb_api_key ? (
+              <p class="text-xs text-blue-400">A server-wide TVDB key is configured by your admin.</p>
+            ) : settings.has_global_tvdb_key && settings.tvdb_api_key ? (
+              <p class="text-xs text-blue-400">A server-wide TVDB key is configured, but you are using your own key.</p>
+            ) : (
+              <p class="text-xs text-zinc-500">Required for TVDB-sourced shows (shows not on TMDB). Get your key at thetvdb.com.</p>
+            )}
+          </div>
           </div>
 
           <!-- ======== SYNC SECTION ======== -->
@@ -2062,7 +2080,7 @@ if (me.totp_enabled) {
       newBtn.addEventListener('click', async () => {
         const action = newBtn.getAttribute('data-action');
         newBtn.disabled = true;
-        const originalText = newBtn.textContent;
+        const originalHTML = newBtn.innerHTML;
         newBtn.textContent = '...';
 
         try {
@@ -2071,8 +2089,11 @@ if (me.totp_enabled) {
           let syncConnId: string | null = null; // set for sync/push actions to start progress poller
 
           if (action === 'test_tmdb') {
-            const val = document.getElementById('tmdb_api_key').value;
+            const val = (document.getElementById('tmdb_api_key') as HTMLInputElement).value;
             url = `/api/proxy/auth/test-tmdb?key=${encodeURIComponent(val)}`;
+          } else if (action === 'test_tvdb') {
+            const val = (document.getElementById('tvdb_api_key') as HTMLInputElement).value;
+            url = `/api/proxy/auth/test-tvdb?key=${encodeURIComponent(val)}`;
           } else if (action === 'test_connection') {
             const connId = newBtn.getAttribute('data-conn-id');
             const connType = newBtn.getAttribute('data-conn-type');
@@ -2443,7 +2464,7 @@ if (me.totp_enabled) {
           showMessage(e.message, 'error');
         } finally {
           newBtn.disabled = false;
-          newBtn.textContent = originalText;
+          newBtn.innerHTML = originalHTML;
         }
       });
     });

@@ -614,7 +614,18 @@ async def test_tmdb(
     success = await tmdb.validate_api_key(key)
     if not success:
         raise HTTPException(status_code=400, detail="Invalid TMDB API Key")
-    return {"status": "ok"}
+    return {"status": "ok", "message": "TMDB API key is valid."}
+
+@router.post("/test-tvdb")
+async def test_tvdb(
+    key: str = Query(...),
+    current_user: User = Depends(get_current_user)
+):
+    from core import tvdb
+    success = await tvdb.validate_api_key(key)
+    if not success:
+        raise HTTPException(status_code=400, detail="Invalid TVDB API Key")
+    return {"status": "ok", "message": "TVDB API key is valid."}
 
 @router.post("/test-jellyfin")
 async def test_jellyfin(
