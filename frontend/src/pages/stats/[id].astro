@@ -114,6 +114,12 @@ const isOwnStats = currentUser && String(currentUser.id) === String(id);
             </div>
           </div>
 
+          <!-- Watch time chart -->
+          <div class="bg-zinc-900/60 border border-zinc-800 rounded-2xl p-6 lg:col-span-2">
+            <h3 class="group-label mb-5">Watch Time Over Time</h3>
+            <div id="watch-time-chart" class="h-40 animate-pulse bg-zinc-800/50 rounded-xl"></div>
+          </div>
+
           <!-- Watch time breakdown -->
           <div class="bg-zinc-900/60 border border-zinc-800 rounded-2xl p-6">
             <h3 class="group-label mb-5">Watch Time</h3>
@@ -364,6 +370,104 @@ const isOwnStats = currentUser && String(currentUser.id) === String(id);
         }, { passive: true });
       } else {
         activityChart.innerHTML = '<p style="color:#52525b;font-size:14px;font-weight:500;text-align:center;padding-top:40px">No watch history for the selected period.</p>';
+      }
+    }
+
+    // Watch time chart
+    const watchTimeChart = document.getElementById('watch-time-chart');
+    if (watchTimeChart) {
+      let wtData = since && until
+        ? (() => {
+            const dataMap = Object.fromEntries((data.watch_time_activity || []).map(d => [d.month, d]));
+            const filled = [];
+            if (isDaily) {
+              const cur = new Date(since); cur.setHours(0,0,0,0);
+              const end = new Date(until); end.setHours(0,0,0,0);
+              while (cur <= end) {
+                const key = _fmt(cur);
+                filled.push(dataMap[key] || { month: key, movie_minutes: 0, show_minutes: 0 });
+                cur.setDate(cur.getDate() + 1);
+              }
+            } else {
+              const [sy, sm] = since.split('-').map(Number);
+              const [uy, um] = until.split('-').map(Number);
+              let cy = sy, cm = sm;
+              while (cy < uy || (cy === uy && cm <= um)) {
+                const key = `${cy}-${String(cm).padStart(2,'0')}`;
+                filled.push(dataMap[key] || { month: key, movie_minutes: 0, show_minutes: 0 });
+                if (++cm > 12) { cm = 1; cy++; }
+              }
+            }
+            return filled;
+          })()
+        : (data.watch_time_activity || []).slice(-24);
+
+      watchTimeChart.classList.remove('animate-pulse', 'bg-zinc-800/50', 'rounded-xl');
+
+      const fmtTime = (mins) => {
+        if (!mins) return '0m';
+        const h = Math.floor(mins / 60), m = mins % 60;
+        return h > 0 ? (m > 0 ? `${h}h ${m}m` : `${h}h`) : `${m}m`;
+      };
+
+      if (wtData.length > 0 && wtData.some(d => d.movie_minutes + d.show_minutes > 0)) {
+        const maxVal = Math.max(...wtData.map(d => d.movie_minutes + d.show_minutes), 1);
+        const barMinWidth = isDaily ? (wtData.length > 90 ? 4 : 10) : 32;
+        watchTimeChart.style.display = 'flex';
+        watchTimeChart.style.flexDirection = 'column';
+        watchTimeChart.innerHTML = `
+          <div id="wt-info" style="height:18px;margin-bottom:4px;display:flex;align-items:center">
+            <span id="wt-info-text" style="font-size:11px;font-weight:700;color:#a1a1aa"></span>
+          </div>
+          <div class="overflow-x-auto scrollbar-none" style="flex:1;min-height:0">
+            <div style="display:flex;flex-direction:column;min-width:max-content;height:100%;padding-bottom:4px">
+              <div style="flex:1;display:flex;align-items:flex-end;gap:2px;min-height:0">
+                ${wtData.map(d => {
+                  const total = d.movie_minutes + d.show_minutes;
+                  const pct = (total / maxVal) * 100;
+                  const moviePct = total > 0 ? (d.movie_minutes / total) * 100 : 50;
+                  const parts = d.month.split('-').map(Number);
+                  const barLabel = isDaily
+                    ? `${monthNames[parts[1]-1]}. ${parts[2]}, ${parts[0]}`
+                    : `${monthNames[parts[1]-1]}. ${parts[0]}`;
+                  const tooltip = `${barLabel}: ${fmtTime(total)} total · ${fmtTime(d.movie_minutes)} movies · ${fmtTime(d.show_minutes)} shows`;
+                  return `
+                    <div data-info="${tooltip}" style="flex:1;min-width:${barMinWidth}px;height:100%;display:flex;flex-direction:column;justify-content:flex-end">
+                      <div style="height:${total > 0 ? Math.max(pct, 2) : 0}%;width:100%;border-radius:3px 3px 0 0;overflow:hidden;display:flex;flex-direction:column">
+                        <div style="flex:${moviePct};background:rgba(14,165,233,0.8)"></div>
+                        <div style="flex:${100-moviePct};background:rgba(168,85,247,0.8)"></div>
+                      </div>
+                    </div>
+                  `;
+                }).join('')}
+              </div>
+              <div style="display:flex;gap:2px;margin-top:4px">
+                ${wtData.map(d => {
+                  const label = getActivityLabel(d, isDaily, wtData.length);
+                  return `<div style="flex:1;min-width:${barMinWidth}px;text-align:center"><span style="font-size:9px;font-weight:700;color:#52525b;text-transform:uppercase;letter-spacing:.04em">${label}</span></div>`;
+                }).join('')}
+              </div>
+            </div>
+          </div>
+          <div style="display:flex;gap:16px;margin-top:10px;padding-top:8px;border-top:1px solid rgba(39,39,42,0.4)">
+            <span style="display:flex;align-items:center;gap:6px;font-size:10px;font-weight:700;color:#71717a;text-transform:uppercase;letter-spacing:.1em"><span style="width:8px;height:8px;border-radius:2px;background:rgba(14,165,233,0.8);display:inline-block"></span>Movies</span>
+            <span style="display:flex;align-items:center;gap:6px;font-size:10px;font-weight:700;color:#71717a;text-transform:uppercase;letter-spacing:.1em"><span style="width:8px;height:8px;border-radius:2px;background:rgba(168,85,247,0.8);display:inline-block"></span>Shows</span>
+          </div>
+        `;
+        const wtInfoText = document.getElementById('wt-info-text');
+        watchTimeChart.addEventListener('mouseover', e => {
+          const bar = e.target.closest('[data-info]');
+          if (bar && wtInfoText) wtInfoText.textContent = bar.dataset.info;
+        });
+        watchTimeChart.addEventListener('mouseleave', () => {
+          if (wtInfoText) wtInfoText.textContent = '';
+        });
+        watchTimeChart.addEventListener('touchstart', e => {
+          const bar = e.target.closest('[data-info]');
+          if (bar && wtInfoText) wtInfoText.textContent = bar.dataset.info;
+        }, { passive: true });
+      } else {
+        watchTimeChart.innerHTML = '<p style="color:#52525b;font-size:14px;font-weight:500;text-align:center;padding-top:40px">No watch time data for the selected period.</p>';
       }
     }
 
