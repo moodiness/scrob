@@ -884,6 +884,7 @@ export interface Comment {
   avatar_url: string | null;
   user_is_public: boolean;
   content: string;
+  is_spoiler: boolean;
   created_at: string;
   updated_at?: string | null;
 }
