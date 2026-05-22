@@ -279,6 +279,19 @@ async def get_now_playing(
     return {"now_playing": sessions}
 
 
+@router.delete("/sessions")
+async def clear_now_playing_sessions(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Delete all active playback sessions for the current user."""
+    await db.execute(
+        delete(PlaybackSession).where(PlaybackSession.user_id == current_user.id)
+    )
+    await db.commit()
+    return {"status": "ok"}
+
+
 @router.get("/continue-watching")
 async def get_continue_watching(
     db: AsyncSession = Depends(get_db),

@@ -13,9 +13,10 @@ from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
 from core.limiter import limiter
 
-from sqlalchemy import or_, select, update
+from sqlalchemy import or_, select, update, delete
 from models.sync import SyncJob, SyncStatus
 from models.base import CollectionSource
+from models.playback_session import PlaybackSession
 
 
 async def _auto_sync_scheduler():
@@ -235,7 +236,7 @@ async def lifespan(app: FastAPI):
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
 
-    # Clean up stuck sync jobs on startup
+    # Clean up stuck sync jobs and orphaned playback sessions on startup
     from db import async_sessionmaker
     async_session = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
     async with async_session() as db:
@@ -244,6 +245,7 @@ async def lifespan(app: FastAPI):
             .where(SyncJob.status.in_([SyncStatus.pending, SyncStatus.running]))
             .values(status=SyncStatus.failed, error_message="Aborted due to server restart")
         )
+        await db.execute(delete(PlaybackSession))
         await db.commit()
 
     scheduler_task = asyncio.create_task(_auto_sync_scheduler())
