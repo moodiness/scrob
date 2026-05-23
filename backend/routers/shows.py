@@ -2,7 +2,8 @@ import asyncio
 from datetime import datetime, date
 from fastapi import APIRouter, Depends, Query, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func, cast as sa_cast, Text, or_, and_
+from sqlalchemy import select, func, case, cast as sa_cast, Text, or_, and_
+from sqlalchemy.orm import aliased
 
 from models.events import WatchEvent
 from models.collection import Collection, CollectionFile
@@ -238,35 +239,34 @@ async def get_show(
         # --- Per-season states ---
         season_states: dict = {}
 
-        # Collected episodes per season
-        coll_per_season_q = await db.execute(
-            select(Media.season_number, func.count(func.distinct(Media.episode_number)))
-            .join(Collection, Collection.media_id == Media.id)
+        # Collected and watched episode counts per season in one query
+        coll_a  = aliased(Collection)
+        watch_a = aliased(WatchEvent)
+        season_stats_q = await db.execute(
+            select(
+                Media.season_number,
+                func.count(func.distinct(
+                    case((coll_a.id.isnot(None), Media.episode_number), else_=None)
+                )).label("collected"),
+                func.count(func.distinct(
+                    case((watch_a.id.isnot(None), Media.episode_number), else_=None)
+                )).label("watched"),
+            )
+            .outerjoin(coll_a, and_(coll_a.media_id == Media.id, coll_a.user_id == current_user.id))
+            .outerjoin(watch_a, and_(watch_a.media_id == Media.id, watch_a.user_id == current_user.id))
             .where(
                 Media.show_id == show.id,
-                Collection.user_id == current_user.id,
                 Media.media_type == MediaType.episode,
                 Media.season_number.isnot(None),
                 Media.episode_number.isnot(None),
             )
             .group_by(Media.season_number)
         )
-        coll_per_season: dict = dict(coll_per_season_q.all())
-
-        # Watched episodes per season (including those not in collection)
-        watched_per_season_q = await db.execute(
-            select(Media.season_number, func.count(func.distinct(Media.episode_number)))
-            .join(WatchEvent, WatchEvent.media_id == Media.id)
-            .where(
-                Media.show_id == show.id,
-                WatchEvent.user_id == current_user.id,
-                Media.media_type == MediaType.episode,
-                Media.season_number.isnot(None),
-                Media.episode_number.isnot(None),
-            )
-            .group_by(Media.season_number)
-        )
-        watched_per_season: dict = dict(watched_per_season_q.all())
+        coll_per_season: dict = {}
+        watched_per_season: dict = {}
+        for sn, collected, watched in season_stats_q.all():
+            coll_per_season[sn] = collected
+            watched_per_season[sn] = watched
 
         # Season user ratings (stored against the show's Media row with season_number)
         show_media_q = await db.execute(

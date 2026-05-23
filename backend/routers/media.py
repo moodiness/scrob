@@ -135,74 +135,11 @@ async def enrich_with_state(
     if radarr_cfg or sonarr_cfg:
         radarr_ready = radarr_cfg is not None
         sonarr_ready = sonarr_cfg is not None
-        
-        # We only do the expensive lookup if len(items) == 1 (detail view)
-        if len(items) == 1:
-            item = items[0]
+        for item in items:
             tid = item.get("tmdb_id")
             t = item.get("type")
-            
-            from core import radarr, sonarr
-            
-            if t == "movie":
-                request_enabled_map[tid] = radarr_ready
-                if radarr_ready:
-                    try:
-                        url = radarr_cfg.radarr_url.rstrip("/")
-                        async with httpx.AsyncClient(timeout=5.0) as client:
-                            res = await client.get(
-                                f"{url}/api/v3/movie/lookup",
-                                params={"apiKey": radarr_cfg.radarr_token, "term": f"tmdb:{tid}"}
-                            )
-                            if res.status_code == 200:
-                                lookup = res.json()
-                                if lookup:
-                                    for entry in lookup:
-                                        if entry.get("id"):
-                                            monitored_status[tid] = True
-                                            break
-                    except Exception: pass
-
-            elif t == "series":
-                request_enabled_map[tid] = sonarr_ready
-                if sonarr_ready:
-                    try:
-                        tvdb_id: int | None = None
-                        show_q = await db.execute(
-                            select(ShowModel).where(ShowModel.tmdb_id == tid)
-                        )
-                        show_row = show_q.scalar_one_or_none()
-                        if show_row and show_row.tmdb_data:
-                            tvdb_id = (show_row.tmdb_data.get("external_ids") or {}).get("tvdb_id")
-
-                        if not tvdb_id:
-                            from core import tmdb as tmdb_core
-                            tmdb_key = await get_user_tmdb_key(db, user_id)
-                            ext_ids = await tmdb_core.get_external_ids(tid, "tv", api_key=tmdb_key)
-                            tvdb_id = ext_ids.get("tvdb_id")
-
-                        if tvdb_id:
-                            url = sonarr_cfg.sonarr_url.rstrip("/")
-                            async with httpx.AsyncClient(timeout=5.0) as client:
-                                res = await client.get(
-                                    f"{url}/api/v3/series/lookup",
-                                    params={"apiKey": sonarr_cfg.sonarr_token, "term": f"tvdb:{tvdb_id}"}
-                                )
-                                if res.status_code == 200:
-                                    lookup = res.json()
-                                    if lookup:
-                                        for entry in lookup:
-                                            if entry.get("id"):
-                                                monitored_status[tid] = True
-                                                break
-                    except Exception: pass
-        else:
-            # For lists, just set if the button should be allowed (optional, currently cards don't show it)
-            for item in items:
-                tid = item.get("tmdb_id")
-                t = item.get("type")
-                if t == "movie": request_enabled_map[tid] = radarr_ready
-                elif t == "series": request_enabled_map[tid] = sonarr_ready
+            if t == "movie": request_enabled_map[tid] = radarr_ready
+            elif t == "series": request_enabled_map[tid] = sonarr_ready
 
     # --- Pending/rejected request state ---
     request_status_map: dict[int, str] = {}
@@ -572,19 +509,23 @@ async def enrich_with_state(
 
 
 async def _get_global_settings(db: AsyncSession) -> GlobalSettings | None:
-    result = await db.execute(select(GlobalSettings).where(GlobalSettings.id == 1))
-    return result.scalar_one_or_none()
+    if "global_settings" not in db.info:
+        result = await db.execute(select(GlobalSettings).where(GlobalSettings.id == 1))
+        db.info["global_settings"] = result.scalar_one_or_none()
+    return db.info["global_settings"]
 
 
 async def get_user_tmdb_key(db: AsyncSession, user_id: int) -> str | None:
-    result = await db.execute(
-        select(UserSettings).where(UserSettings.user_id == user_id)
-    )
-    settings_row = result.scalar_one_or_none()
-    if settings_row and settings_row.tmdb_api_key:
-        return settings_row.tmdb_api_key
-    gs = await _get_global_settings(db)
-    return gs.tmdb_api_key if gs else None
+    cache_key = f"tmdb_key_{user_id}"
+    if cache_key not in db.info:
+        result = await db.execute(select(UserSettings).where(UserSettings.user_id == user_id))
+        settings_row = result.scalar_one_or_none()
+        if settings_row and settings_row.tmdb_api_key:
+            db.info[cache_key] = settings_row.tmdb_api_key
+        else:
+            gs = await _get_global_settings(db)
+            db.info[cache_key] = gs.tmdb_api_key if gs else None
+    return db.info[cache_key]
 
 
 def _effective_radarr(user_settings: UserSettings | None, global_settings: GlobalSettings | None):
@@ -715,7 +656,12 @@ async def list_media(
     )
 
     # Count total
-    count_query = select(func.count()).select_from(base_query.subquery())
+    count_query = (
+        select(func.count())
+        .select_from(Media)
+        .join(Collection, Collection.media_id == Media.id)
+        .where(*filters)
+    )
     total_result = await db.execute(count_query)
     total_count = total_result.scalar_one()
     total_pages = (total_count + page_size - 1) // page_size
@@ -2687,6 +2633,72 @@ async def uncollect_season(
     return {"status": "ok"}
 
 
+@router.get("/request-status")
+async def get_request_status(
+    tmdb_id: int = Query(...),
+    media_type: MediaType = Query(...),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Check whether a movie/series is already monitored in Radarr/Sonarr."""
+    settings_q = await db.execute(select(UserSettings).where(UserSettings.user_id == current_user.id))
+    settings = settings_q.scalar_one_or_none()
+    gs = await _get_global_settings(db)
+
+    monitored = False
+
+    try:
+        if media_type == MediaType.movie:
+            radarr_cfg = _effective_radarr(settings, gs)
+            if not radarr_cfg:
+                raise HTTPException(status_code=503, detail="Radarr not configured")
+            url = radarr_cfg.radarr_url.rstrip("/")
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                res = await client.get(
+                    f"{url}/api/v3/movie/lookup",
+                    params={"apiKey": radarr_cfg.radarr_token, "term": f"tmdb:{tmdb_id}"},
+                )
+                if res.status_code == 200:
+                    for entry in res.json():
+                        if entry.get("id"):
+                            monitored = True
+                            break
+
+        elif media_type == MediaType.series:
+            sonarr_cfg = _effective_sonarr(settings, gs)
+            if not sonarr_cfg:
+                raise HTTPException(status_code=503, detail="Sonarr not configured")
+            tvdb_id: int | None = None
+            show_q = await db.execute(select(ShowModel).where(ShowModel.tmdb_id == tmdb_id))
+            show_row = show_q.scalar_one_or_none()
+            if show_row and show_row.tmdb_data:
+                tvdb_id = (show_row.tmdb_data.get("external_ids") or {}).get("tvdb_id")
+            if not tvdb_id:
+                from core import tmdb as tmdb_core
+                tmdb_key = await get_user_tmdb_key(db, current_user.id)
+                ext_ids = await tmdb_core.get_external_ids(tmdb_id, "tv", api_key=tmdb_key)
+                tvdb_id = ext_ids.get("tvdb_id")
+            if tvdb_id:
+                url = sonarr_cfg.sonarr_url.rstrip("/")
+                async with httpx.AsyncClient(timeout=5.0) as client:
+                    res = await client.get(
+                        f"{url}/api/v3/series/lookup",
+                        params={"apiKey": sonarr_cfg.sonarr_token, "term": f"tvdb:{tvdb_id}"},
+                    )
+                    if res.status_code == 200:
+                        for entry in res.json():
+                            if entry.get("id"):
+                                monitored = True
+                                break
+
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(status_code=503, detail="Service unavailable")
+
+    return {"monitored": monitored}
+
+
 @router.post("/{type}/{tmdb_id}/request")
 async def request_media(
     type: MediaType,
@@ -3876,32 +3888,6 @@ async def get_media_details(
                 }
 
         # 3. Format Merged Response
-        collection = None
-        if type == MediaType.movie:
-            raw_coll = data.get("belongs_to_collection")
-            if raw_coll:
-                coll_data = await tmdb.get_collection(raw_coll["id"], api_key=tmdb_key)
-                collection = {
-                    "id": coll_data.get("id"),
-                    "name": coll_data.get("name"),
-                    "poster_path": tmdb.poster_url(coll_data.get("poster_path")),
-                    "backdrop_path": tmdb.poster_url(
-                        coll_data.get("backdrop_path"), size="original"
-                    ),
-                    "parts": [
-                        {
-                            "tmdb_id": p.get("id"),
-                            "title": p.get("title"),
-                            "type": MediaType.movie,
-                            "poster_path": tmdb.poster_url(p.get("poster_path")),
-                            "release_date": p.get("release_date"),
-                            "overview": p.get("overview"),
-                            "adult": p.get("adult", False),
-                        }
-                        for p in coll_data.get("parts", [])
-                    ],
-                }
-
         production_companies = [
             {
                 "id": c["id"],
@@ -3914,16 +3900,46 @@ async def get_media_details(
             for c in data.get("production_companies", [])
         ]
 
-        # Enrich with user state (watched, in_lists, collection_pct)
+        # Gather: collection fetch + state enrichment + where-to-watch in parallel
         state_item: dict = {"tmdb_id": tmdb_id, "type": type.value}
-        await enrich_with_state(db, current_user.id, [state_item])
+        raw_coll = data.get("belongs_to_collection") if type == MediaType.movie else None
+
+        gather_coros = [
+            enrich_with_state(db, current_user.id, [state_item]),
+            get_where_to_watch(db, current_user.id, tmdb_id, MediaType.movie, media=media, tmdb_key=tmdb_key),
+        ]
+        if raw_coll:
+            gather_coros.append(tmdb.get_collection(raw_coll["id"], api_key=tmdb_key))
+
+        gather_results = await asyncio.gather(*gather_coros)
+        where_to_watch = gather_results[1]
+        coll_data = gather_results[2] if raw_coll else None
+
+        collection = None
+        if coll_data:
+            collection = {
+                "id": coll_data.get("id"),
+                "name": coll_data.get("name"),
+                "poster_path": tmdb.poster_url(coll_data.get("poster_path")),
+                "backdrop_path": tmdb.poster_url(
+                    coll_data.get("backdrop_path"), size="original"
+                ),
+                "parts": [
+                    {
+                        "tmdb_id": p.get("id"),
+                        "title": p.get("title"),
+                        "type": MediaType.movie,
+                        "poster_path": tmdb.poster_url(p.get("poster_path")),
+                        "release_date": p.get("release_date"),
+                        "overview": p.get("overview"),
+                        "adult": p.get("adult", False),
+                    }
+                    for p in coll_data.get("parts", [])
+                ],
+            }
 
         if collection and collection.get("parts"):
             await enrich_with_state(db, current_user.id, collection["parts"])
-
-        where_to_watch = await get_where_to_watch(
-            db, current_user.id, tmdb_id, MediaType.movie, media=media, tmdb_key=tmdb_key
-        )
 
         return {
             **local_info,
