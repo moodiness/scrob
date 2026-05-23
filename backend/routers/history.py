@@ -516,6 +516,30 @@ async def mark_as_watched(
     return {"status": "ok", "message": f"Marked {media.title} as watched"}
 
 
+@router.get("/item-events")
+async def get_item_events(
+    tmdb_id: int = Query(...),
+    media_type: MediaType = Query(...),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Return all completed watch events for a specific movie or episode."""
+    query = (
+        select(WatchEvent)
+        .join(Media, Media.id == WatchEvent.media_id)
+        .where(
+            WatchEvent.user_id == current_user.id,
+            WatchEvent.completed == True,
+            Media.tmdb_id == tmdb_id,
+            Media.media_type == media_type,
+        )
+        .order_by(desc(WatchEvent.watched_at))
+    )
+    result = await db.execute(query)
+    events = result.scalars().all()
+    return [{"id": e.id, "watched_at": e.watched_at.isoformat()} for e in events]
+
+
 @router.delete("/event/{event_id}")
 async def delete_single_event(
     event_id: int,
