@@ -977,6 +977,7 @@ const bottomNavItem = (active: boolean) =>
       const p = (n: number) => String(n).padStart(2, '0');
       return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
     };
+    const toUTC = (d: Date) => d.toISOString().slice(0, 16);
 
     function closeWatchHistoryModal() {
       document.getElementById('watch-history-modal')!.classList.add('hidden');
@@ -1014,7 +1015,7 @@ const bottomNavItem = (active: boolean) =>
           eventsEl.innerHTML = '<div class="px-4 py-3 text-sm text-zinc-500 italic">No plays recorded yet</div>';
         } else {
           eventsEl.innerHTML = events.map(ev => {
-            const d = new Date(ev.watched_at.includes('Z') ? ev.watched_at : ev.watched_at + 'Z');
+            const d = new Date(ev.watched_at + 'Z');
             const fmt = d.toLocaleString(undefined, { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit', hour12: !(window as any).__USE_24H__ });
             return `<div class="flex items-center justify-between px-4 py-2.5 hover:bg-zinc-800/50 group">
               <span class="text-sm text-zinc-200">${esc(fmt)}</span>
@@ -1078,7 +1079,7 @@ const bottomNavItem = (active: boolean) =>
 
       document.getElementById('watch-history-log-btn')!.addEventListener('click', async () => {
         const input = document.getElementById('watch-history-date-input') as HTMLInputElement;
-        const watchedAt = _watchHistoryUseNow ? toLocal(new Date()) : (input.value || toLocal(new Date()));
+        const watchedAt = _watchHistoryUseNow ? toUTC(new Date()) : toUTC(new Date(input.value || toLocal(new Date())));
         const logBtn = document.getElementById('watch-history-log-btn') as HTMLButtonElement;
         logBtn.disabled = true;
         logBtn.textContent = 'Logging…';
