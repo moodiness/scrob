@@ -642,6 +642,23 @@ async def sync_items(
                                         existing_media_obj.episode_number = episode_num
                                     if not any(m is existing_media_obj for m, _ in new_media_for_enrichment):
                                         new_media_for_enrichment.append((existing_media_obj, ep_series_tmdb_id))
+                        else:
+                            # Heal missing show_title tag on existing stub episodes (synced before
+                            # stub-tagging was introduced). Backfill so match-unmatched-show can find them.
+                            if (
+                                existing_media_obj.tmdb_id is None
+                                and existing_media_obj.show_id is None
+                                and not (existing_media_obj.tmdb_data or {}).get("show_title")
+                            ):
+                                _series_name = (
+                                    item.get("SeriesName") if source in (CollectionSource.jellyfin, CollectionSource.emby)
+                                    else item.get("grandparentTitle")
+                                )
+                                if _series_name:
+                                    existing_media_obj.tmdb_data = {
+                                        **(existing_media_obj.tmdb_data or {}),
+                                        "show_title": _series_name,
+                                    }
                 else:
                     show_id = show_map.get(str(parent_id)) if media_type == MediaType.episode else None
 
@@ -1076,7 +1093,8 @@ async def _run_jellyfin_sync(user_id: int, job_id: int, movie_limit: int, show_l
 
             print(f"Jellyfin sync job {job_id} completed. Stats: {stats}")
             await _fan_out_changes_to_other_connections(db, user_id, conn.id, _new_watched, _new_ratings, settings=settings)
-            await db.execute(update(SyncJob).where(SyncJob.id == job_id).values(status=SyncStatus.completed, stats=stats, warnings=all_warnings or None))
+            all_warnings = await _stamp_matched_show_warnings(db, user_id, all_warnings)
+            await db.execute(update(SyncJob).where(SyncJob.id == job_id).values(status=SyncStatus.completed, stats=stats, warnings=all_warnings or None, updated_at=func.now()))
             await db.commit()
         except Exception as e:
             print(f"Jellyfin sync job {job_id} failed: {e}")
@@ -1263,7 +1281,8 @@ async def _run_emby_sync(user_id: int, job_id: int, movie_limit: int, show_limit
 
             print(f"Emby sync job {job_id} completed. Stats: {stats}")
             await _fan_out_changes_to_other_connections(db, user_id, conn.id, _new_watched, _new_ratings, settings=settings)
-            await db.execute(update(SyncJob).where(SyncJob.id == job_id).values(status=SyncStatus.completed, stats=stats, warnings=all_warnings or None))
+            all_warnings = await _stamp_matched_show_warnings(db, user_id, all_warnings)
+            await db.execute(update(SyncJob).where(SyncJob.id == job_id).values(status=SyncStatus.completed, stats=stats, warnings=all_warnings or None, updated_at=func.now()))
             await db.commit()
         except Exception as e:
             print(f"Emby sync job {job_id} failed: {e}")
@@ -1561,7 +1580,8 @@ async def _run_plex_sync(user_id: int, job_id: int, movie_limit: int, show_limit
                 print(f"Plex sync job {job_id}: backfilled language data for {backfilled} file(s).")
             print(f"Plex sync job {job_id} completed. Stats: {stats}")
             await _fan_out_changes_to_other_connections(db, user_id, conn.id, _new_watched, _new_ratings, settings=settings)
-            await db.execute(update(SyncJob).where(SyncJob.id == job_id).values(status=SyncStatus.completed, stats=stats, warnings=all_warnings or None))
+            all_warnings = await _stamp_matched_show_warnings(db, user_id, all_warnings)
+            await db.execute(update(SyncJob).where(SyncJob.id == job_id).values(status=SyncStatus.completed, stats=stats, warnings=all_warnings or None, updated_at=func.now()))
             await db.commit()
         except Exception as e:
             print(f"Plex sync job {job_id} failed: {e}")
@@ -2289,6 +2309,65 @@ async def abort_sync(
     return {"status": "ok", "message": "All active sync jobs have been marked as aborted"}
 
 
+async def _stamp_matched_show_warnings(db: AsyncSession, user_id: int, warnings: list[dict]) -> list[dict]:
+    """Auto-stamp warnings for shows that have already been TVDB-matched by this user.
+
+    On every sync, series/episode warnings are regenerated fresh without matched state.
+    This helper checks each warning title against already-matched Media rows and stamps
+    matched:true + tvdb/show info so the panel renders the correct badge without requiring
+    the user to re-run the match action.
+    """
+    from sqlalchemy import func as sa_func
+
+    titles = set()
+    for w in warnings:
+        t = w.get("title") or w.get("series_name")
+        if t:
+            titles.add(t.lower())
+
+    if not titles:
+        return warnings
+
+    # Find any episode Media row per matched title (show_id set, show has tvdb_id)
+    matched_ep_result = await db.execute(
+        select(Media, Show)
+        .join(Collection, Collection.media_id == Media.id)
+        .join(Show, Show.id == Media.show_id)
+        .where(
+            Collection.user_id == user_id,
+            Media.media_type == MediaType.episode,
+            Media.show_id.isnot(None),
+            Show.tvdb_id.isnot(None),
+            sa_func.lower(Media.tmdb_data["show_title"].astext).in_(list(titles)),
+        )
+        .limit(len(titles) * 5)
+    )
+    title_to_show: dict[str, Show] = {}
+    for media, show in matched_ep_result.all():
+        key = (media.tmdb_data or {}).get("show_title", "").lower()
+        if key and key not in title_to_show:
+            title_to_show[key] = show
+
+    if not title_to_show:
+        return warnings
+
+    stamped = []
+    for w in warnings:
+        raw_title = w.get("title") or w.get("series_name") or ""
+        show = title_to_show.get(raw_title.lower())
+        if show and not w.get("matched"):
+            stamped.append({
+                **w,
+                "matched": True,
+                "matched_tvdb_id": show.tvdb_id,
+                "matched_show_id": show.tmdb_id,
+                "matched_show_title": show.title,
+            })
+        else:
+            stamped.append(w)
+    return stamped
+
+
 # ── Season override endpoints ─────────────────────────────────────────────────
 
 class SeasonOverrideBody(BaseModel):
@@ -2307,13 +2386,25 @@ async def list_season_overrides(
         select(ShowSeasonOverride).where(ShowSeasonOverride.user_id == current_user.id)
     )
     overrides = result.scalars().all()
+
+    # Resolve show titles for all distinct TMDB IDs referenced by overrides
+    all_tmdb_ids = {o.source_show_tmdb_id for o in overrides} | {o.target_show_tmdb_id for o in overrides}
+    show_title_map: dict[int, str] = {}
+    if all_tmdb_ids:
+        shows_res = await db.execute(select(Show.tmdb_id, Show.title).where(Show.tmdb_id.in_(list(all_tmdb_ids))))
+        for tmdb_id, title in shows_res.all():
+            if tmdb_id is not None:
+                show_title_map[tmdb_id] = title
+
     return [
         {
             "id": o.id,
             "source_show_tmdb_id": o.source_show_tmdb_id,
             "source_season_number": o.source_season_number,
+            "source_show_title": show_title_map.get(o.source_show_tmdb_id),
             "target_show_tmdb_id": o.target_show_tmdb_id,
             "target_season_number": o.target_season_number,
+            "target_show_title": show_title_map.get(o.target_show_tmdb_id),
         }
         for o in overrides
     ]
@@ -2566,7 +2657,7 @@ async def match_unmatched_show(
                             **w,
                             "matched": True,
                             "matched_tvdb_id": target_show.tvdb_id,
-                            "matched_show_id": target_show.id,
+                            "matched_show_id": target_show.tmdb_id,
                             "matched_show_title": target_show.title,
                         })
                         changed = True
@@ -2581,9 +2672,47 @@ async def match_unmatched_show(
                 "matched": 0,
                 "skipped": 0,
                 "tvdb_id": target_show.tvdb_id,
-                "show_id": target_show.id,
+                "show_id": target_show.tmdb_id,
             }
-        raise HTTPException(status_code=404, detail="No unmatched episodes found for this show title")
+
+        # Locate stub episodes via source_id recorded in SyncJob warnings.
+        # Scan all warnings (stamped or not) — once all episode warnings are stamped,
+        # the unmatched-only filter would find nothing and we'd never reach the TVDB/TMDB path.
+        title_lower = body.show_title.lower()
+        stub_source_ids: list[str] = []
+        stub_warn_res = await db.execute(
+            select(SyncJob.warnings).where(
+                SyncJob.user_id == current_user.id,
+                SyncJob.status == SyncStatus.completed,
+                SyncJob.warnings.isnot(None),
+            ).order_by(SyncJob.created_at.desc())
+        )
+        for (warnings,) in stub_warn_res.all():
+            if not warnings:
+                continue
+            for w in warnings:
+                warn_title = (w.get("series_name") or "").lower()
+                if warn_title == title_lower and w.get("source_id"):
+                    stub_source_ids.append(str(w["source_id"]))
+        if stub_source_ids:
+            stub_ep_res = await db.execute(
+                select(Media)
+                .join(Collection, Collection.media_id == Media.id)
+                .join(CollectionFile, CollectionFile.collection_id == Collection.id)
+                .where(
+                    Collection.user_id == current_user.id,
+                    CollectionFile.source_id.in_(stub_source_ids),
+                    Media.media_type == MediaType.episode,
+                )
+                .options(selectinload(Media.show))
+                .distinct()
+            )
+            stub_episodes = stub_ep_res.scalars().all()
+            # Use all stub episodes for matching, including any already linked to a stale show.
+            episodes = stub_episodes
+
+        if not episodes:
+            raise HTTPException(status_code=404, detail="No unmatched episodes found for this show title")
 
     from collections import defaultdict
     seasons_map: dict[int, list] = defaultdict(list)
@@ -2607,12 +2736,12 @@ async def match_unmatched_show(
         # Find or create Show row keyed by tvdb_id
         target_show_result = await db.execute(select(Show).where(Show.tvdb_id == body.tvdb_id))
         target_show = target_show_result.scalar_one_or_none()
+        try:
+            raw = await tvdb_client.get_series(body.tvdb_id, tvdb_api_key)
+        except Exception as e:
+            raise HTTPException(status_code=502, detail=f"Could not fetch show from TVDB: {e}")
+        show_fmt = tvdb_client.format_series(raw)
         if not target_show:
-            try:
-                raw = await tvdb_client.get_series(body.tvdb_id, tvdb_api_key)
-            except Exception as e:
-                raise HTTPException(status_code=502, detail=f"Could not fetch show from TVDB: {e}")
-            show_fmt = tvdb_client.format_series(raw)
             target_show = Show(
                 tvdb_id=body.tvdb_id,
                 tmdb_id=None,
@@ -2628,6 +2757,16 @@ async def match_unmatched_show(
             )
             db.add(target_show)
             await db.flush()
+        else:
+            target_show.title = show_fmt["title"] or body.show_title or target_show.title
+            target_show.original_title = show_fmt.get("original_title") or target_show.original_title
+            target_show.overview = show_fmt.get("overview") or target_show.overview
+            target_show.poster_path = show_fmt.get("poster_path") or target_show.poster_path
+            target_show.backdrop_path = show_fmt.get("backdrop_path") or target_show.backdrop_path
+            target_show.status = show_fmt.get("status") or target_show.status
+            target_show.first_air_date = show_fmt.get("first_air_date") or target_show.first_air_date
+            target_show.last_air_date = show_fmt.get("last_air_date") or target_show.last_air_date
+            target_show.tmdb_data = {"seasons": show_fmt.get("seasons", []), "genres": show_fmt.get("genres", []), "source": "tvdb"}
 
         async def _enrich_season_tvdb(season_number: int, season_episodes: list) -> None:
             nonlocal matched, skipped
@@ -2668,24 +2807,49 @@ async def match_unmatched_show(
         if not tmdb_api_key:
             raise HTTPException(status_code=400, detail="TMDB API key required")
 
-        target_show_result = await db.execute(select(Show).where(Show.tmdb_id == body.tmdb_id))
-        target_show = target_show_result.scalar_one_or_none()
+        try:
+            show_data = await tmdb.get_show(body.tmdb_id, api_key=tmdb_api_key)
+        except Exception as e:
+            raise HTTPException(status_code=502, detail=f"Could not fetch show from TMDB: {e}")
+        seasons_meta = [
+            {
+                "season_number": s["season_number"],
+                "name": s.get("name"),
+                "overview": s.get("overview"),
+                "poster_path": tmdb.poster_url(s.get("poster_path")),
+                "episode_count": s.get("episode_count"),
+                "air_date": s.get("air_date"),
+            }
+            for s in show_data.get("seasons", [])
+        ]
+
+        # Prefer an existing show that shares the TVDB cross-reference from TMDB external_ids.
+        # This consolidates TMDB matches with auto-matched TVDB shows so both versions of
+        # the same Plex show (e.g. color + B&W) end up on the same show page.
+        tmdb_tvdb_id = (show_data.get("external_ids") or {}).get("tvdb_id")
+        target_show = None
+        if tmdb_tvdb_id:
+            tvdb_cross_result = await db.execute(select(Show).where(Show.tvdb_id == tmdb_tvdb_id))
+            target_show = tvdb_cross_result.scalar_one_or_none()
+
+        if target_show is not None:
+            # Found a TVDB-matched show to consolidate with.
+            # Clear tmdb_id from any stale TMDB-only show that previously claimed this TMDB ID,
+            # then re-home its episodes to target_show so they aren't orphaned.
+            if target_show.tmdb_id != body.tmdb_id:
+                displaced_result = await db.execute(select(Show).where(Show.tmdb_id == body.tmdb_id))
+                displaced_show = displaced_result.scalar_one_or_none()
+                if displaced_show and displaced_show.id != target_show.id:
+                    await db.execute(
+                        update(Media).where(Media.show_id == displaced_show.id).values(show_id=target_show.id)
+                    )
+                    displaced_show.tmdb_id = None
+            target_show.tmdb_id = body.tmdb_id
+        else:
+            tmdb_show_result = await db.execute(select(Show).where(Show.tmdb_id == body.tmdb_id))
+            target_show = tmdb_show_result.scalar_one_or_none()
+
         if not target_show:
-            try:
-                show_data = await tmdb.get_show(body.tmdb_id, api_key=tmdb_api_key)
-            except Exception as e:
-                raise HTTPException(status_code=502, detail=f"Could not fetch show from TMDB: {e}")
-            seasons_meta = [
-                {
-                    "season_number": s["season_number"],
-                    "name": s.get("name"),
-                    "overview": s.get("overview"),
-                    "poster_path": tmdb.poster_url(s.get("poster_path")),
-                    "episode_count": s.get("episode_count"),
-                    "air_date": s.get("air_date"),
-                }
-                for s in show_data.get("seasons", [])
-            ]
             target_show = Show(
                 tmdb_id=body.tmdb_id,
                 title=show_data.get("name") or show_data.get("original_name"),
@@ -2702,6 +2866,19 @@ async def match_unmatched_show(
             )
             db.add(target_show)
             await db.flush()
+        else:
+            # Refresh metadata in case it has stale data from a previous wrong match.
+            target_show.title = show_data.get("name") or show_data.get("original_name") or target_show.title
+            target_show.original_title = show_data.get("original_name") or target_show.original_title
+            target_show.overview = show_data.get("overview") or target_show.overview
+            target_show.poster_path = tmdb.poster_url(show_data.get("poster_path")) or target_show.poster_path
+            target_show.backdrop_path = tmdb.poster_url(show_data.get("backdrop_path"), size="w1280") or target_show.backdrop_path
+            target_show.tmdb_rating = show_data.get("vote_average") or target_show.tmdb_rating
+            target_show.status = show_data.get("status") or target_show.status
+            target_show.tagline = show_data.get("tagline") or target_show.tagline
+            target_show.first_air_date = show_data.get("first_air_date") or target_show.first_air_date
+            target_show.last_air_date = show_data.get("last_air_date") or target_show.last_air_date
+            target_show.tmdb_data = {**show_data, "seasons": seasons_meta}
 
         async def _enrich_season(season_number: int, season_episodes: list) -> None:
             nonlocal matched, skipped
@@ -2754,7 +2931,7 @@ async def match_unmatched_show(
                     **w,
                     "matched": True,
                     "matched_tvdb_id": body.tvdb_id,
-                    "matched_show_id": target_show.id if target_show else None,
+                    "matched_show_id": target_show.tmdb_id if target_show else None,
                     "matched_show_title": target_show.title if target_show else None,
                 })
                 changed = True
@@ -2770,8 +2947,57 @@ async def match_unmatched_show(
         "matched": matched,
         "skipped": skipped,
         "tvdb_id": body.tvdb_id,
-        "show_id": target_show.id if target_show else None,
+        "show_id": target_show.tmdb_id if target_show else None,
     }
+
+
+@router.post("/heal-stub-show-titles")
+async def heal_stub_show_titles(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Backfill tmdb_data['show_title'] for stub episodes that have it NULL,
+    using series_name from SyncJob warnings matched via CollectionFile source_id."""
+    warn_res = await db.execute(
+        select(SyncJob.warnings).where(
+            SyncJob.user_id == current_user.id,
+            SyncJob.warnings.isnot(None),
+        )
+    )
+    # Build source_id → series_name map from all warnings
+    source_to_title: dict[str, str] = {}
+    for (warnings,) in warn_res.all():
+        for w in (warnings or []):
+            sn = w.get("series_name")
+            sid = w.get("source_id")
+            if sn and sid:
+                source_to_title[str(sid)] = sn
+
+    if not source_to_title:
+        return {"status": "ok", "healed": 0}
+
+    # Find stub episodes with NULL tmdb_data via those source_ids
+    ep_res = await db.execute(
+        select(Media, CollectionFile.source_id)
+        .join(Collection, Collection.media_id == Media.id)
+        .join(CollectionFile, CollectionFile.collection_id == Collection.id)
+        .where(
+            Collection.user_id == current_user.id,
+            Media.media_type == MediaType.episode,
+            Media.tmdb_data.is_(None),
+            CollectionFile.source_id.in_(list(source_to_title.keys())),
+        )
+        .distinct()
+    )
+    healed = 0
+    for media, source_id in ep_res.all():
+        title = source_to_title.get(source_id)
+        if title:
+            media.tmdb_data = {"show_title": title}
+            healed += 1
+
+    await db.commit()
+    return {"status": "ok", "healed": healed}
 
 
 class UnmatchShowBody(BaseModel):
@@ -2800,6 +3026,33 @@ async def unmatch_show(
     )
     episodes = ep_result.scalars().all()
     if not episodes:
+        # Fallback: find via source_ids from SyncJob warnings (tmdb_data may be NULL)
+        title_lower_u = body.show_title.lower()
+        src_warn_res = await db.execute(
+            select(SyncJob.warnings).where(
+                SyncJob.user_id == current_user.id,
+                SyncJob.warnings.isnot(None),
+            )
+        )
+        fallback_source_ids: list[str] = []
+        for (warnings,) in src_warn_res.all():
+            for w in (warnings or []):
+                if (w.get("series_name") or w.get("title") or "").lower() == title_lower_u and w.get("source_id"):
+                    fallback_source_ids.append(str(w["source_id"]))
+        if fallback_source_ids:
+            fb_res = await db.execute(
+                select(Media)
+                .join(Collection, Collection.media_id == Media.id)
+                .join(CollectionFile, CollectionFile.collection_id == Collection.id)
+                .where(
+                    Collection.user_id == current_user.id,
+                    Media.media_type == MediaType.episode,
+                    CollectionFile.source_id.in_(fallback_source_ids),
+                )
+                .distinct()
+            )
+            episodes = fb_res.scalars().all()
+    if not episodes:
         raise HTTPException(status_code=404, detail="No matched stub episodes found for this show title")
 
     show_ids_to_check: set[int] = set()
@@ -2815,14 +3068,17 @@ async def unmatch_show(
 
     await db.commit()
 
-    # Remove Show rows that are now orphaned (no remaining linked media, no tmdb_id)
+    # Remove Show rows that are now orphaned (no remaining linked media).
+    # TMDB-only shows (no tvdb_id) are deleted so a future match creates a fresh row
+    # instead of reusing a show row that may have stale/wrong metadata.
+    # TVDB-tagged shows are kept — they carry a canonical TVDB ID used elsewhere.
     for show_id in show_ids_to_check:
         remaining = await db.execute(
             select(func.count()).select_from(Media).where(Media.show_id == show_id)
         )
         if remaining.scalar_one() == 0:
             show_q = await db.execute(
-                select(Show).where(Show.id == show_id, Show.tmdb_id.is_(None))
+                select(Show).where(Show.id == show_id, Show.tvdb_id.is_(None))
             )
             orphaned = show_q.scalar_one_or_none()
             if orphaned:
@@ -3014,3 +3270,107 @@ async def unmatch_movie(
 
     await db.commit()
     return {"status": "ok", "unmatched": len(movies)}
+
+
+@router.get("/matched-shows")
+async def list_matched_shows(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Return all matched shows (TMDB or TVDB) for the current user.
+
+    Used by the settings panel to overlay matched state onto SyncJob warnings that
+    were stamped before the auto-stamping logic existed, without requiring a resync.
+
+    Two sources are combined:
+    1. Media rows with show_id → matched Show, keyed by tmdb_data["show_title"].
+    2. SyncJob warnings with matched:true (covers shows where show_title is absent from
+       tmdb_data, e.g. episodes that weren't created as stubs or had tmdb_data overwritten).
+    """
+    from sqlalchemy import func as sa_func
+
+    # Fetch all shows in the system to build a db_id -> Show mapping
+    # This allows us to map any database show.id to its tmdb_id dynamically,
+    # correcting any legacy/already-stamped warning entries where matched_show_id was show.id.
+    shows_res = await db.execute(select(Show.id, Show.tmdb_id, Show.tvdb_id, Show.title))
+    show_id_map = {
+        row.id: {
+            "tmdb_id": row.tmdb_id,
+            "tvdb_id": row.tvdb_id,
+            "title": row.title,
+        }
+        for row in shows_res.all()
+    }
+
+    seen: dict[str, dict] = {}
+
+    # Source 1: episodes linked to matched shows (TMDB or TVDB), keyed by show_title in tmdb_data
+    result = await db.execute(
+        select(
+            Media.tmdb_data["show_title"].astext.label("show_title"),
+            Show.tmdb_id.label("show_id"),
+            Show.tvdb_id,
+            Show.title.label("show_title_matched"),
+        )
+        .join(Collection, Collection.media_id == Media.id)
+        .join(Show, Show.id == Media.show_id)
+        .where(
+            Collection.user_id == current_user.id,
+            Media.media_type == MediaType.episode,
+            Media.show_id.isnot(None),
+            (Show.tvdb_id.isnot(None) | Show.tmdb_id.isnot(None)),
+            Media.tmdb_data["show_title"].astext.isnot(None),
+        )
+        .distinct()
+    )
+    for row in result.all():
+        key = (row.show_title or "").lower()
+        if key and key not in seen:
+            seen[key] = {
+                "show_title": row.show_title,
+                "show_id": row.show_id,
+                "tvdb_id": row.tvdb_id,
+                "show_title_matched": row.show_title_matched,
+            }
+
+    # Source 2: SyncJob warnings stamped with matched:true (fallback for missing show_title)
+    jobs_res = await db.execute(
+        select(SyncJob.warnings).where(
+            SyncJob.user_id == current_user.id,
+            SyncJob.status == SyncStatus.completed,
+            SyncJob.warnings.isnot(None),
+        ).order_by(SyncJob.created_at.desc()).limit(10)
+    )
+    for (warnings,) in jobs_res.all():
+        if not warnings:
+            continue
+        for w in warnings:
+            if not w.get("matched"):
+                continue
+            title = w.get("series_name") or w.get("title")
+            if not title:
+                continue
+            key = title.lower()
+            if key not in seen:
+                legacy_show_id = w.get("matched_show_id")
+                matched_tvdb_id = w.get("matched_tvdb_id")
+                matched_show_id = legacy_show_id
+
+                if legacy_show_id in show_id_map:
+                    show_info = show_id_map[legacy_show_id]
+                    # Only map if titles match (case-insensitive) or tmdb_id matches, preventing collisions
+                    db_title = show_info["title"].lower()
+                    matched_title = (w.get("matched_show_title") or "").lower()
+                    if db_title == key or db_title == matched_title or show_info["tmdb_id"] == legacy_show_id:
+                        matched_show_id = show_info["tmdb_id"]
+                        if show_info["tvdb_id"]:
+                            matched_tvdb_id = show_info["tvdb_id"]
+
+                seen[key] = {
+                    "show_title": title,
+                    "show_id": matched_show_id,
+                    "tvdb_id": matched_tvdb_id,
+                    "show_title_matched": w.get("matched_show_title"),
+                }
+
+    return list(seen.values())

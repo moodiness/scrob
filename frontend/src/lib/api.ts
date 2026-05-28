@@ -234,8 +234,10 @@ export interface ShowSeasonOverride {
   id: number;
   source_show_tmdb_id: number;
   source_season_number: number;
+  source_show_title: string | null;
   target_show_tmdb_id: number;
   target_season_number: number;
+  target_show_title: string | null;
 }
 
 export interface UserList {
@@ -1227,5 +1229,9 @@ export const api = {
       post<{ status: string }>(`/admin/requests/${requestId}/approve`, undefined, token),
     rejectRequest: (requestId: number, token: string) =>
       post<{ status: string }>(`/admin/requests/${requestId}/reject`, undefined, token),
+  },
+  sync: {
+    getSeasonOverrides: (token: string) =>
+      get<ShowSeasonOverride[]>("/sync/season-overrides", undefined, token),
   },
 };
