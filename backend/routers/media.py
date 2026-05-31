@@ -2344,6 +2344,16 @@ async def manually_collect(
     return {"status": "ok", "message": "Added to collection"}
 
 
+@router.delete("/collect/all")
+async def clear_collection(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    await db.execute(delete(Collection).where(Collection.user_id == current_user.id))
+    await db.commit()
+    return {"status": "ok"}
+
+
 @router.delete("/collect")
 async def manually_uncollect(
     tmdb_id: int | None = Query(None),
