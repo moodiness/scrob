@@ -202,6 +202,8 @@ That's it — no database container, no `DATABASE_URL` to configure. PostgreSQL 
 
 ### Docker Run
 
+**Standard image** (requires a separate PostgreSQL container):
+
 ```bash
 # Create a dedicated network
 docker network create scrob-net
@@ -226,7 +228,22 @@ docker run -d \
   -e DATABASE_URL="postgresql+asyncpg://scrob:changeme@scrob-db:5432/scrob" \
   -e SECRET_KEY="$(openssl rand -hex 32)" \
   -e TZ=UTC \
+  -v scrob_data:/app/backend/data \
   bellamy/scrob:latest
+```
+
+**Omnibus image** (PostgreSQL included — no separate container needed):
+
+```bash
+docker run -d \
+  --name scrob \
+  --restart unless-stopped \
+  -p 7330:7330 \
+  -e SECRET_KEY="$(openssl rand -hex 32)" \
+  -e TZ=UTC \
+  -v scrob_data:/app/backend/data \
+  -v scrob_db:/app/postgres/data \
+  bellamy/scrob:latest-omnibus
 ```
 
 ### First Setup
