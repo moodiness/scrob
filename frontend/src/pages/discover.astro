@@ -606,6 +606,7 @@ function skeletonWide() {
       resultEl.classList.add('hidden');
       errorEl.classList.remove('flex');
       errorEl.classList.add('hidden');
+      document.getElementById('pick-backdrop-img').src = '';
 
       let idx = Math.floor(Math.random() * PHRASES.length);
       emojiEl.textContent = PHRASES[idx].emoji;
@@ -642,52 +643,57 @@ function skeletonWide() {
     }
 
     function showResult(data) {
-      if (phraseInterval) { clearInterval(phraseInterval); phraseInterval = null; }
-      loadingEl.classList.add('hidden');
-      loadingEl.classList.remove('flex');
-      errorEl.classList.add('hidden');
-      errorEl.classList.remove('flex');
-      resultEl.classList.remove('hidden');
-      resultEl.classList.add('flex');
+      const imgSrc = data.backdrop_path || data.poster_path || null;
 
-      const backdropImg = document.getElementById('pick-backdrop-img');
-      const backdropWrap = document.getElementById('pick-backdrop-wrap');
-      if (data.backdrop_path) {
-        backdropImg.src = data.backdrop_path;
-        backdropImg.alt = data.title || '';
-        backdropWrap.classList.remove('hidden');
-      } else if (data.poster_path) {
-        backdropImg.src = data.poster_path;
-        backdropImg.alt = data.title || '';
-        backdropWrap.classList.remove('hidden');
-      } else {
-        backdropWrap.classList.add('hidden');
+      function render() {
+        if (phraseInterval) { clearInterval(phraseInterval); phraseInterval = null; }
+        loadingEl.classList.add('hidden');
+        loadingEl.classList.remove('flex');
+        errorEl.classList.add('hidden');
+        errorEl.classList.remove('flex');
+        resultEl.classList.remove('hidden');
+        resultEl.classList.add('flex');
+
+        const backdropImg = document.getElementById('pick-backdrop-img');
+        const backdropWrap = document.getElementById('pick-backdrop-wrap');
+        if (imgSrc) {
+          backdropImg.src = imgSrc;
+          backdropImg.alt = data.title || '';
+          backdropWrap.classList.remove('hidden');
+        } else {
+          backdropWrap.classList.add('hidden');
+        }
+
+        document.getElementById('pick-title').textContent = data.title || '';
+
+        const year = data.release_date ? data.release_date.slice(0, 4) : '';
+        const rating = data.tmdb_rating ? '★ ' + Number(data.tmdb_rating).toFixed(1) : '';
+        const metaParts = [year, rating].filter(Boolean);
+        document.getElementById('pick-meta').textContent = metaParts.join(' · ');
+
+        document.getElementById('pick-overview').textContent = data.overview || '';
+
+        const genresEl = document.getElementById('pick-genres');
+        const genres = data.genres || [];
+        genresEl.innerHTML = genres.map(g => `<span class="px-3 py-1 bg-zinc-800 border border-zinc-700 text-zinc-400 text-xs font-bold rounded-full uppercase tracking-wider">${esc(g)}</span>`).join('');
+
+        const sourcesEl = document.getElementById('pick-sources');
+        const sources = data.sources || [];
+        sourcesEl.innerHTML = sources.length
+          ? sources.map(sourceLabel).join('')
+          : '<span class="text-sm text-zinc-500">No streaming source found</span>';
+
+        const viewLink = document.getElementById('pick-view-link');
+        viewLink.href = data.type === 'series' ? '/show/' + data.tmdb_id : '/media/movie/' + data.tmdb_id;
       }
 
-      document.getElementById('pick-title').textContent = data.title || '';
-
-      const year = data.release_date ? data.release_date.slice(0, 4) : '';
-      const rating = data.tmdb_rating ? '★ ' + Number(data.tmdb_rating).toFixed(1) : '';
-      const metaParts = [year, rating].filter(Boolean);
-      document.getElementById('pick-meta').textContent = metaParts.join(' · ');
-
-      document.getElementById('pick-overview').textContent = data.overview || '';
-
-      const genresEl = document.getElementById('pick-genres');
-      const genres = data.genres || [];
-      genresEl.innerHTML = genres.map(g => `<span class="px-3 py-1 bg-zinc-800 border border-zinc-700 text-zinc-400 text-xs font-bold rounded-full uppercase tracking-wider">${esc(g)}</span>`).join('');
-
-      const sourcesEl = document.getElementById('pick-sources');
-      const sources = data.sources || [];
-      sourcesEl.innerHTML = sources.length
-        ? sources.map(sourceLabel).join('')
-        : '<span class="text-sm text-zinc-500">No streaming source found</span>';
-
-      const viewLink = document.getElementById('pick-view-link');
-      if (data.type === 'series') {
-        viewLink.href = '/show/' + data.tmdb_id;
+      if (imgSrc) {
+        const img = new Image();
+        img.onload = render;
+        img.onerror = render;
+        img.src = imgSrc;
       } else {
-        viewLink.href = '/media/movie/' + data.tmdb_id;
+        render();
       }
     }
 
