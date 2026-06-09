@@ -361,8 +361,8 @@ async def get_show(
                 **s,
                 "tmdb_season_id": tmdb_season_map.get(s["season_number"], {}).get("id"),
                 "tmdb_rating": tmdb_season_map.get(s["season_number"], {}).get("vote_average"),
-                # Fill overview/air_date from live TMDB if not stored in DB
-                "overview": s.get("overview") or tmdb_season_map.get(s["season_number"], {}).get("overview"),
+                # Prefer live TMDB (translated) overview; fall back to DB value
+                "overview": tmdb_season_map.get(s["season_number"], {}).get("overview") or s.get("overview"),
                 "air_date": s.get("air_date") or tmdb_season_map.get(s["season_number"], {}).get("air_date"),
             }
             for s in base_seasons_meta
@@ -1174,12 +1174,15 @@ async def get_tvdb_show(
     if not api_key:
         raise HTTPException(status_code=400, detail="TVDB API key not configured")
 
+    metadata_lang = await get_user_metadata_language(db, current_user.id)
+    tvdb_lang = tvdb_client.tvdb_language(metadata_lang)
+
     try:
         raw = await tvdb_client.get_series(tvdb_id, api_key)
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"TVDB fetch failed: {e}")
 
-    show_data = tvdb_client.format_series(raw)
+    show_data = tvdb_client.format_series(raw, language=tvdb_lang)
     cast = tvdb_client.format_cast(raw)
 
     # Look up local Show row by tvdb_id
@@ -1314,15 +1317,18 @@ async def get_tvdb_season(
     if not api_key:
         raise HTTPException(status_code=400, detail="TVDB API key not configured")
 
+    metadata_lang = await get_user_metadata_language(db, current_user.id)
+    tvdb_lang = tvdb_client.tvdb_language(metadata_lang)
+
     try:
         raw_series, raw_episodes = await asyncio.gather(
             tvdb_client.get_series(tvdb_id, api_key),
-            tvdb_client.get_series_episodes(tvdb_id, season_number, api_key),
+            tvdb_client.get_series_episodes(tvdb_id, season_number, api_key, language=tvdb_lang),
         )
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"TVDB fetch failed: {e}")
 
-    show_data = tvdb_client.format_series(raw_series)
+    show_data = tvdb_client.format_series(raw_series, language=tvdb_lang)
     eps = [tvdb_client.format_episode(e) for e in raw_episodes]
 
     # Look up local Show row and episode states
@@ -1443,15 +1449,18 @@ async def get_tvdb_episode(
     if not api_key:
         raise HTTPException(status_code=400, detail="TVDB API key not configured")
 
+    metadata_lang = await get_user_metadata_language(db, current_user.id)
+    tvdb_lang = tvdb_client.tvdb_language(metadata_lang)
+
     try:
         raw_series, raw_episodes = await asyncio.gather(
             tvdb_client.get_series(tvdb_id, api_key),
-            tvdb_client.get_series_episodes(tvdb_id, season_number, api_key),
+            tvdb_client.get_series_episodes(tvdb_id, season_number, api_key, language=tvdb_lang),
         )
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"TVDB fetch failed: {e}")
 
-    show_data = tvdb_client.format_series(raw_series)
+    show_data = tvdb_client.format_series(raw_series, language=tvdb_lang)
     eps = [tvdb_client.format_episode(e) for e in raw_episodes]
     ep_data = next((e for e in eps if e.get("episode_number") == episode_number), None)
     if not ep_data:

@@ -4106,7 +4106,7 @@ async def get_media_details(
                 "tmdb_id": tmdb_id,
                 "type": "episode",
                 "title": ep_data.get("name") or local_ep.title,
-                "overview": ep_data.get("overview"),
+                "overview": ep_data.get("overview") or local_ep.overview,
                 "poster_path": tmdb.poster_url(ep_data.get("still_path"), size="w780"),
                 "backdrop_path": show.backdrop_path,
                 "release_date": ep_data.get("air_date"),
@@ -4264,7 +4264,7 @@ async def get_media_details(
             "request_status": state_item.get("request_status"),
             "title": data.get("title") or data.get("name"),
             "original_title": data.get("original_title") or data.get("original_name"),
-            "overview": data.get("overview"),
+            "overview": data.get("overview") or (media.overview if media else None),
             "poster_path": tmdb.poster_url(data.get("poster_path")),
             "backdrop_path": tmdb.poster_url(
                 data.get("backdrop_path"), size="original"

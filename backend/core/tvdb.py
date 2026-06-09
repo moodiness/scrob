@@ -15,6 +15,40 @@ _token_lock = asyncio.Lock()
 
 TVDB_IMAGE_BASE = "https://artworks.thetvdb.com"
 
+# BCP 47 (metadata_language) → ISO 639-3 used by TVDB
+_TVDB_LANG: dict[str, str] = {
+    "en":    "eng",
+    "fr":    "fra",
+    "de":    "deu",
+    "es":    "spa",
+    "es-MX": "spa",
+    "it":    "ita",
+    "pt-BR": "por",
+    "pt-PT": "por",
+    "ja":    "jpn",
+    "ko":    "kor",
+    "zh-CN": "zho",
+    "zh-TW": "zho",
+    "hi":    "hin",
+    "ar":    "ara",
+    "ru":    "rus",
+    "nl":    "nld",
+    "pl":    "pol",
+    "tr":    "tur",
+    "sv":    "swe",
+    "cs":    "ces",
+    "hu":    "hun",
+    "hr":    "hrv",
+    "sr":    "srp",
+}
+
+
+def tvdb_language(metadata_language: str | None) -> str | None:
+    """Convert a BCP 47 metadata_language code to the ISO 639-3 code TVDB expects."""
+    if not metadata_language:
+        return None
+    return _TVDB_LANG.get(metadata_language)
+
 
 def _image_url(path: str | None) -> str | None:
     if not path:
@@ -100,15 +134,18 @@ async def get_series(tvdb_id: int, api_key: str) -> dict:
     return data.get("data") or {}
 
 
-async def get_series_episodes(tvdb_id: int, season_number: int, api_key: str) -> list[dict]:
+async def get_series_episodes(tvdb_id: int, season_number: int, api_key: str, language: str | None = None) -> list[dict]:
     """Fetch episodes for a specific season (season_type=official)."""
     episodes = []
     page = 0
     while True:
+        params: dict = {"page": page, "season": season_number}
+        if language:
+            params["language"] = language
         data = await _get(
             f"/series/{tvdb_id}/episodes/official",
             api_key,
-            params={"page": page, "season": season_number},
+            params=params,
         )
         batch = (data.get("data") or {}).get("episodes") or []
         if not batch:
@@ -121,17 +158,27 @@ async def get_series_episodes(tvdb_id: int, season_number: int, api_key: str) ->
     return episodes
 
 
-def format_series(raw: dict) -> dict:
+def format_series(raw: dict, language: str | None = None) -> dict:
     """Normalise TVDB extended series data into a frontend-friendly dict."""
     image = raw.get("image") or ""
     poster = _image_url(image) if image else None
 
     translations = raw.get("translations") or {}
-    eng_overview = None
-    for t in translations.get("overviewTranslations") or []:
-        if isinstance(t, dict) and t.get("language") == "eng":
-            eng_overview = t.get("overview")
-            break
+
+    def _pick(key: str, field: str) -> str | None:
+        entries = translations.get(key) or []
+        result = None
+        for t in entries:
+            if not isinstance(t, dict):
+                continue
+            if language and t.get("language") == language:
+                return t.get(field) or None  # preferred language found
+            if t.get("language") == "eng":
+                result = t.get(field) or None  # English fallback
+        return result
+
+    translated_title = _pick("nameTranslations", "name")
+    eng_overview = _pick("overviewTranslations", "overview")
 
     genres = [g.get("name") for g in (raw.get("genres") or []) if g.get("name")]
 
@@ -191,8 +238,8 @@ def format_series(raw: dict) -> dict:
 
     return {
         "tvdb_id": raw.get("id"),
-        "title": raw.get("name"),
-        "original_title": raw.get("originalName"),
+        "title": translated_title or raw.get("name"),
+        "original_title": raw.get("originalName") or raw.get("name"),
         "overview": eng_overview or raw.get("overview"),
         "poster_path": poster,
         "backdrop_path": _image_url(raw.get("artworks", [{}])[0].get("image") if raw.get("artworks") else None),
