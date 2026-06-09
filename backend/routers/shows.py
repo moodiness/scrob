@@ -21,6 +21,15 @@ from routers.media import format_media, get_user_tmdb_key, check_tmdb_key, enric
 from dependencies import get_current_user
 from core import tmdb
 from core import tvdb as tvdb_client
+from core.translations import (
+    get_user_metadata_language,
+    get_media_translations,
+    get_show_translations,
+    upsert_media_translation,
+    upsert_show_translation,
+    apply_media_translations,
+    apply_show_translations,
+)
 
 router = APIRouter()
 
@@ -129,6 +138,11 @@ async def list_shows(
     result = await db.execute(q.limit(page_size).offset(offset))
     results = [format_show(s) for s in result.scalars().all()]
     await enrich_with_state(db, current_user.id, results)
+    lang = await get_user_metadata_language(db, current_user.id)
+    if lang:
+        show_ids = [r["id"] for r in results if r.get("id")]
+        translations = await get_show_translations(db, show_ids, lang)
+        apply_show_translations(results, translations)
     return {
         "page": page,
         "page_size": page_size,
@@ -180,9 +194,10 @@ async def get_show(
         cast = []
         tmdb_extra: dict | None = None
         api_key = await get_user_tmdb_key(db, current_user.id)
+        metadata_lang = await get_user_metadata_language(db, current_user.id)
         if check_tmdb_key(api_key):
             try:
-                tmdb_extra = await tmdb.get_show(series_tmdb_id, api_key=api_key)
+                tmdb_extra = await tmdb.get_show(series_tmdb_id, api_key=api_key, language=metadata_lang)
                 networks = [
                     {
                         "id": n["id"],
@@ -226,6 +241,18 @@ async def get_show(
                     }
                     for c in tmdb_extra.get("credits", {}).get("cast", [])[:12]
                 ]
+                if metadata_lang:
+                    try:
+                        await upsert_show_translation(
+                            db, show.id, metadata_lang,
+                            tmdb_extra.get("name"),
+                            tmdb_extra.get("overview"),
+                            tmdb_extra.get("tagline"),
+                            tmdb_extra.get("poster_path"),
+                        )
+                        await db.commit()
+                    except Exception:
+                        pass
             except Exception:
                 pass
 
@@ -345,8 +372,23 @@ async def get_show(
             db, current_user.id, series_tmdb_id, MediaType.series, show=show, tmdb_key=api_key
         )
 
+        # Overlay episode translations for the seasons dict
+        if metadata_lang:
+            all_ep_ids = [ep["id"] for ep_list in seasons.values() for ep in ep_list if ep.get("id")]
+            if all_ep_ids:
+                ep_trans = await get_media_translations(db, all_ep_ids, metadata_lang)
+                for ep_list in seasons.values():
+                    apply_media_translations(ep_list, ep_trans)
+
+        show_dict = format_show(show)
+        if metadata_lang and tmdb_extra:
+            for field, tmdb_key in [("title", "name"), ("overview", "overview"), ("tagline", "tagline")]:
+                val = tmdb_extra.get(tmdb_key)
+                if val:
+                    show_dict[field] = val
+
         return {
-            **format_show(show),
+            **show_dict,
             "seasons_meta": enhanced_seasons_meta,
             "original_language": (show.tmdb_data or {}).get("original_language") or (tmdb_extra or {}).get("original_language"),
             "age_rating": _extract_show_content_rating(tmdb_extra) if tmdb_extra else None,
@@ -524,6 +566,7 @@ async def get_show_season(
 
     # 2. Always fetch full season data from TMDB for consistent metadata
     api_key = await get_user_tmdb_key(db, current_user.id)
+    metadata_lang = await get_user_metadata_language(db, current_user.id)
 
     try:
         if check_tmdb_key(api_key):
@@ -532,8 +575,8 @@ async def get_show_season(
             # Fetch season and show info (if not local) in parallel
             if not show:
                 tmdb_data, tmdb_show_data = await asyncio.gather(
-                    tmdb.get_season(series_tmdb_id, season_number, api_key=api_key),
-                    tmdb.get_show(series_tmdb_id, api_key=api_key),
+                    tmdb.get_season(series_tmdb_id, season_number, api_key=api_key, language=metadata_lang),
+                    tmdb.get_show(series_tmdb_id, api_key=api_key, language=metadata_lang),
                 )
                 show_info = {
                     "id": None,
@@ -546,7 +589,7 @@ async def get_show_season(
                 }
             else:
                 tmdb_data = await tmdb.get_season(
-                    series_tmdb_id, season_number, api_key=api_key
+                    series_tmdb_id, season_number, api_key=api_key, language=metadata_lang
                 )
                 show_info = format_show(show)
 
@@ -685,6 +728,22 @@ async def get_show_season(
                         "in_lists": episode_in_lists.get(ep.get("id"), []),
                     }
                 )
+
+            # Store episode translations for library browsing
+            if metadata_lang:
+                try:
+                    for ep_item in episodes:
+                        if ep_item.get("id"):
+                            await upsert_media_translation(
+                                db, ep_item["id"], metadata_lang,
+                                ep_item.get("title"),
+                                ep_item.get("overview"),
+                                None,
+                                None,
+                            )
+                    await db.commit()
+                except Exception:
+                    pass
 
             show_state: dict = {"tmdb_id": series_tmdb_id, "type": "series"}
             await enrich_with_state(db, current_user.id, [show_state])
@@ -833,6 +892,7 @@ async def get_episode_detail(
     api_key = await get_user_tmdb_key(db, current_user.id)
     if not check_tmdb_key(api_key):
         raise HTTPException(status_code=404, detail="TMDB API Key not configured")
+    metadata_lang = await get_user_metadata_language(db, current_user.id)
 
     try:
         import asyncio
@@ -844,15 +904,15 @@ async def get_episode_detail(
 
         if show:
             ep_data = await tmdb.get_episode(
-                series_tmdb_id, season_number, episode_number, api_key=api_key
+                series_tmdb_id, season_number, episode_number, api_key=api_key, language=metadata_lang
             )
             show_info = format_show(show)
         else:
             ep_data, show_tmdb = await asyncio.gather(
                 tmdb.get_episode(
-                    series_tmdb_id, season_number, episode_number, api_key=api_key
+                    series_tmdb_id, season_number, episode_number, api_key=api_key, language=metadata_lang
                 ),
-                tmdb.get_show(series_tmdb_id, api_key=api_key),
+                tmdb.get_show(series_tmdb_id, api_key=api_key, language=metadata_lang),
             )
             show_info = {
                 "id": None,
@@ -916,9 +976,23 @@ async def get_episode_detail(
             for c in ep_data.get("guest_stars", [])[:6]
         ]
 
+        # Store episode translation for library browsing
+        if metadata_lang and local_ep:
+            try:
+                await upsert_media_translation(
+                    db, local_ep.id, metadata_lang,
+                    ep_data.get("name"),
+                    ep_data.get("overview"),
+                    None,
+                    ep_data.get("still_path"),
+                )
+                await db.commit()
+            except Exception:
+                pass
+
         # Get all episodes in this season for navigation
         season_tmdb = await tmdb.get_season(
-            series_tmdb_id, season_number, api_key=api_key
+            series_tmdb_id, season_number, api_key=api_key, language=metadata_lang
         )
         episodes_nav = [
             {

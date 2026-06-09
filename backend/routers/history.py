@@ -15,6 +15,7 @@ from models.base import MediaType, CollectionSource
 from models.users import UserSettings
 from models.connections import MediaServerConnection
 from routers.media import enrich_with_state, get_user_tmdb_key, check_tmdb_key
+from core.translations import get_user_metadata_language, get_media_translations, apply_media_translations
 
 from dependencies import get_current_user
 from models.users import User
@@ -217,6 +218,17 @@ async def get_history(
     events = [format_event(e, m) for e, m in rows]
     if events:
         await enrich_with_state(db, current_user.id, [e["media"] for e in events])
+        lang = await get_user_metadata_language(db, current_user.id)
+        if lang:
+            media_ids = [e["media"]["id"] for e in events if e["media"].get("id")]
+            translations = await get_media_translations(db, media_ids, lang)
+            for event in events:
+                t = translations.get(event["media"].get("id"))
+                if t:
+                    m = event["media"]
+                    if t.get("title"): m["title"] = t["title"]
+                    if t.get("overview"): m["overview"] = t["overview"]
+                    if t.get("poster_path"): m["poster_path"] = t["poster_path"]
 
     return {
         "page": page,
@@ -311,6 +323,17 @@ async def get_continue_watching(
     items = [format_event(e, m) for e, m in rows]
     if items:
         await enrich_with_state(db, current_user.id, [i["media"] for i in items])
+        lang = await get_user_metadata_language(db, current_user.id)
+        if lang:
+            media_ids = [i["media"]["id"] for i in items if i["media"].get("id")]
+            translations = await get_media_translations(db, media_ids, lang)
+            for item in items:
+                t = translations.get(item["media"].get("id"))
+                if t:
+                    m = item["media"]
+                    if t.get("title"): m["title"] = t["title"]
+                    if t.get("overview"): m["overview"] = t["overview"]
+                    if t.get("poster_path"): m["poster_path"] = t["poster_path"]
     return {"continue_watching": items}
 
 
@@ -451,6 +474,11 @@ async def get_next_up(
         item["next_up_hidden"] = item.get("show_id") in hidden_set
     if items:
         await enrich_with_state(db, current_user.id, items)
+        lang = await get_user_metadata_language(db, current_user.id)
+        if lang:
+            media_ids = [i["id"] for i in items if i.get("id")]
+            translations = await get_media_translations(db, media_ids, lang)
+            apply_media_translations(items, translations)
 
     return {"next_up": items}
 

@@ -372,6 +372,7 @@ export interface UserPreferences {
   disliked_genres: string[];
   streaming_services: string[];
   content_language: string | null;
+  metadata_language: string | null;
   privacy_level: PrivacyLevel;
   avatar_url: string | null;
 }

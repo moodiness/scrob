@@ -22,6 +22,8 @@ from .global_settings import GlobalSettings
 from .season_override import ShowSeasonOverride
 from .media_request import MediaRequest
 from .image_cache import ImageCache
+from .media_translation import MediaTranslation
+from .show_translation import ShowTranslation
 
 __all__ = [
     "Base",
@@ -48,4 +50,6 @@ __all__ = [
     "ShowSeasonOverride",
     "MediaRequest",
     "ImageCache",
+    "MediaTranslation",
+    "ShowTranslation",
 ]

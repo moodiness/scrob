@@ -51,34 +51,47 @@ async def validate_api_key(api_key: str) -> bool:
         return False
 
 
-async def get_movie(tmdb_id: int, api_key: str = None) -> dict:
+async def get_movie(tmdb_id: int, api_key: str = None, language: str | None = None) -> dict:
+    params: dict = {"append_to_response": "credits,release_dates,recommendations"}
+    if language:
+        params["language"] = language
     return await _get(
         f"{TMDB_BASE}/movie/{tmdb_id}",
         headers=get_headers(api_key),
-        params={"append_to_response": "credits,release_dates,recommendations"},
+        params=params,
     )
 
 
-async def get_show(tmdb_id: int, api_key: str = None) -> dict:
+async def get_show(tmdb_id: int, api_key: str = None, language: str | None = None) -> dict:
+    params: dict = {"append_to_response": "credits,content_ratings,recommendations,external_ids"}
+    if language:
+        params["language"] = language
     return await _get(
         f"{TMDB_BASE}/tv/{tmdb_id}",
         headers=get_headers(api_key),
-        params={"append_to_response": "credits,content_ratings,recommendations,external_ids"},
+        params=params,
     )
 
 
-async def get_season(tmdb_id: int, season_number: int, api_key: str = None) -> dict:
+async def get_season(tmdb_id: int, season_number: int, api_key: str = None, language: str | None = None) -> dict:
+    params: dict = {}
+    if language:
+        params["language"] = language
     return await _get(
         f"{TMDB_BASE}/tv/{tmdb_id}/season/{season_number}",
         headers=get_headers(api_key),
+        params=params or None,
     )
 
 
-async def get_episode(tmdb_id: int, season_number: int, episode_number: int, api_key: str = None) -> dict:
+async def get_episode(tmdb_id: int, season_number: int, episode_number: int, api_key: str = None, language: str | None = None) -> dict:
+    params: dict = {"append_to_response": "credits"}
+    if language:
+        params["language"] = language
     return await _get(
         f"{TMDB_BASE}/tv/{tmdb_id}/season/{season_number}/episode/{episode_number}",
         headers=get_headers(api_key),
-        params={"append_to_response": "credits"},
+        params=params,
     )
 
 
@@ -90,9 +103,20 @@ async def get_trending_shows(time_window: str = "day", page: int = 1, api_key: s
     return await _get(f"{TMDB_BASE}/trending/tv/{time_window}", headers=get_headers(api_key), params={"page": page})
 
 
-async def get_show_light(tmdb_id: int, api_key: str = None) -> dict:
+async def get_show_light(tmdb_id: int, api_key: str = None, language: str | None = None) -> dict:
     """Fetch base show details (includes last_episode_to_air / next_episode_to_air)."""
-    return await _get(f"{TMDB_BASE}/tv/{tmdb_id}", headers=get_headers(api_key))
+    params: dict = {}
+    if language:
+        params["language"] = language
+    return await _get(f"{TMDB_BASE}/tv/{tmdb_id}", headers=get_headers(api_key), params=params or None)
+
+
+async def get_movie_light(tmdb_id: int, api_key: str = None, language: str | None = None) -> dict:
+    """Fetch base movie details without append_to_response (cheaper, used for translation backfill)."""
+    params: dict = {}
+    if language:
+        params["language"] = language
+    return await _get(f"{TMDB_BASE}/movie/{tmdb_id}", headers=get_headers(api_key), params=params or None)
 
 
 async def get_on_air_today(page: int = 1, api_key: str = None, timezone: str = "UTC") -> dict:
@@ -115,21 +139,28 @@ async def get_top_rated_shows(page: int = 1, api_key: str = None) -> dict:
     return await _get(f"{TMDB_BASE}/tv/top_rated", headers=get_headers(api_key), params={"page": page})
 
 
-async def search_multi(q: str, page: int = 1, api_key: str = None) -> dict:
-    return await _get(f"{TMDB_BASE}/search/multi", headers=get_headers(api_key), params={"query": q, "include_adult": "false", "page": page})
+async def search_multi(q: str, page: int = 1, api_key: str = None, language: str | None = None) -> dict:
+    params: dict = {"query": q, "include_adult": "false", "page": page}
+    if language:
+        params["language"] = language
+    return await _get(f"{TMDB_BASE}/search/multi", headers=get_headers(api_key), params=params)
 
 
-async def search_movies(q: str, page: int = 1, year: int | None = None, api_key: str = None) -> dict:
+async def search_movies(q: str, page: int = 1, year: int | None = None, api_key: str = None, language: str | None = None) -> dict:
     params: dict = {"query": q, "include_adult": "false", "page": page}
     if year:
         params["primary_release_year"] = year
+    if language:
+        params["language"] = language
     return await _get(f"{TMDB_BASE}/search/movie", headers=get_headers(api_key), params=params)
 
 
-async def search_shows(q: str, page: int = 1, year: int | None = None, api_key: str = None) -> dict:
+async def search_shows(q: str, page: int = 1, year: int | None = None, api_key: str = None, language: str | None = None) -> dict:
     params: dict = {"query": q, "include_adult": "false", "page": page}
     if year:
         params["first_air_date_year"] = year
+    if language:
+        params["language"] = language
     return await _get(f"{TMDB_BASE}/search/tv", headers=get_headers(api_key), params=params)
 
 

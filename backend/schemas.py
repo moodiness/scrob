@@ -236,6 +236,7 @@ class UserProfileUpdate(BaseModel):
     disliked_genres: Optional[list[str]] = None
     streaming_services: Optional[list[str]] = None
     content_language: Optional[str] = None
+    metadata_language: Optional[str] = None
     privacy_level: Optional[PrivacyLevel] = None
 
 class UserProfileResponse(BaseModel):
@@ -247,6 +248,7 @@ class UserProfileResponse(BaseModel):
     disliked_genres: list[str] = []
     streaming_services: list[str] = []
     content_language: Optional[str] = None
+    metadata_language: Optional[str] = None
     privacy_level: PrivacyLevel = PrivacyLevel.private
     avatar_url: Optional[str] = None
 

@@ -26,6 +26,12 @@ from models.lists import List as UserList, ListItem
 from models.media_request import MediaRequest, RequestStatus
 from models.profile import UserProfileData
 from core import tmdb
+from core.translations import (
+    get_user_metadata_language,
+    get_media_translations,
+    upsert_media_translation,
+    apply_media_translations,
+)
 from dependencies import get_current_user
 from models.users import User, UserSettings
 from models.show import Show as ShowModel
@@ -701,6 +707,11 @@ async def list_media(
 
     results = [format_media(m) for m in items]
     await enrich_with_state(db, current_user.id, results)
+    lang = await get_user_metadata_language(db, current_user.id)
+    if lang:
+        media_ids = [r["id"] for r in results if r.get("id")]
+        translations = await get_media_translations(db, media_ids, lang)
+        apply_media_translations(results, translations)
     return {
         "page": page,
         "page_size": page_size,
@@ -1353,6 +1364,11 @@ async def recently_added(
     result = await db.execute(query)
     items = [format_media(m) for m in result.scalars().all()]
     await enrich_with_state(db, current_user.id, items)
+    lang = await get_user_metadata_language(db, current_user.id)
+    if lang:
+        media_ids = [i["id"] for i in items if i.get("id")]
+        translations = await get_media_translations(db, media_ids, lang)
+        apply_media_translations(items, translations)
     return {"results": items}
 
 
@@ -4018,11 +4034,12 @@ async def get_media_details(
     tmdb_key = await get_user_tmdb_key(db, current_user.id)
     if not check_tmdb_key(tmdb_key):
         raise HTTPException(status_code=404, detail="TMDB API Key not configured")
+    metadata_lang = await get_user_metadata_language(db, current_user.id)
 
     try:
         # 1. Fetch from TMDB
         if type == MediaType.movie:
-            data = await tmdb.get_movie(tmdb_id, api_key=tmdb_key)
+            data = await tmdb.get_movie(tmdb_id, api_key=tmdb_key, language=metadata_lang)
         elif type == MediaType.episode:
             # Look up the episode in the local DB to find its show context
             ep_result = await db.execute(
@@ -4048,10 +4065,21 @@ async def get_media_details(
                 raise HTTPException(status_code=404, detail="Show not found for this episode")
 
             ep_data = await tmdb.get_episode(
-                show.tmdb_id, local_ep.season_number, local_ep.episode_number, api_key=tmdb_key
+                show.tmdb_id, local_ep.season_number, local_ep.episode_number,
+                api_key=tmdb_key, language=metadata_lang,
             )
             ep_state: dict = {"tmdb_id": tmdb_id, "type": "episode"}
             await enrich_with_state(db, current_user.id, [ep_state])
+            # Store translation for library browsing
+            if metadata_lang:
+                await upsert_media_translation(
+                    db, local_ep.id, metadata_lang,
+                    ep_data.get("name") or local_ep.title,
+                    ep_data.get("overview"),
+                    None,
+                    ep_data.get("still_path"),
+                )
+                await db.commit()
             # Check local info for library tags
             library_info = None
             if local_ep:
@@ -4155,6 +4183,17 @@ async def get_media_details(
                     "audio_languages": coll_file.audio_languages,
                     "subtitle_languages": coll_file.subtitle_languages,
                 }
+
+        # Store translation for library browsing
+        if metadata_lang and local_info.get("id"):
+            await upsert_media_translation(
+                db, local_info["id"], metadata_lang,
+                data.get("title") or data.get("name"),
+                data.get("overview"),
+                data.get("tagline"),
+                data.get("poster_path"),
+            )
+            await db.commit()
 
         # 3. Format Merged Response
         production_companies = [
