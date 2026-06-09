@@ -174,7 +174,7 @@ async def enrich_with_state(
         q = await db.execute(
             select(Media.tmdb_id)
             .join(WatchEvent, WatchEvent.media_id == Media.id)
-            .where(WatchEvent.user_id == user_id, Media.tmdb_id.in_(movie_tmdb_ids), Media.media_type == MediaType.movie)
+            .where(WatchEvent.user_id == user_id, WatchEvent.completed == True, Media.tmdb_id.in_(movie_tmdb_ids), Media.media_type == MediaType.movie)
             .distinct()
         )
         watched_movies = {r[0] for r in q.all()}
@@ -207,6 +207,7 @@ async def enrich_with_state(
             .join(ShowModel, ShowModel.id == Media.show_id)
             .where(
                 WatchEvent.user_id == user_id,
+                WatchEvent.completed == True,
                 Media.media_type == MediaType.episode,
                 Media.season_number.isnot(None),
                 Media.season_number != 0,
@@ -234,7 +235,7 @@ async def enrich_with_state(
         q = await db.execute(
             select(Media.tmdb_id)
             .join(WatchEvent, WatchEvent.media_id == Media.id)
-            .where(WatchEvent.user_id == user_id, Media.tmdb_id.in_(ep_tmdb_ids), Media.media_type == MediaType.episode)
+            .where(WatchEvent.user_id == user_id, WatchEvent.completed == True, Media.tmdb_id.in_(ep_tmdb_ids), Media.media_type == MediaType.episode)
             .distinct()
         )
         watched_episodes = {r[0] for r in q.all()}
@@ -311,7 +312,7 @@ async def enrich_with_state(
                         )
 
         # Count distinct watched episodes per show, deduplicated by (season, episode).
-        # We find episodes by their show_id link. 
+        # We find episodes by their show_id link.
         # Primary path: show_id -> ShowModel.id -> ShowModel.tmdb_id
         watched_eps_sq = (
             select(ShowModel.tmdb_id.label("show_tmdb_id"), Media.season_number, Media.episode_number)
@@ -319,6 +320,7 @@ async def enrich_with_state(
             .join(ShowModel, ShowModel.id == Media.show_id)
             .where(
                 WatchEvent.user_id == user_id,
+                WatchEvent.completed == True,
                 Media.media_type == MediaType.episode,
                 Media.season_number.isnot(None),
                 Media.season_number != 0,

@@ -204,7 +204,7 @@ async def search_users(
     movies_q = await db.execute(
         select(WatchEvent.user_id, func.count(func.distinct(WatchEvent.media_id)))
         .join(Media, WatchEvent.media_id == Media.id)
-        .where(WatchEvent.user_id.in_(user_ids), Media.media_type == "movie")
+        .where(WatchEvent.user_id.in_(user_ids), WatchEvent.completed == True, Media.media_type == "movie")
         .group_by(WatchEvent.user_id)
     )
     movies_map = dict(movies_q.all())
@@ -213,7 +213,7 @@ async def search_users(
         select(WatchEvent.user_id, func.count(func.distinct(ShowModel.id)))
         .join(Media, WatchEvent.media_id == Media.id)
         .join(ShowModel, Media.show_id == ShowModel.id)
-        .where(WatchEvent.user_id.in_(user_ids))
+        .where(WatchEvent.user_id.in_(user_ids), WatchEvent.completed == True)
         .group_by(WatchEvent.user_id)
     )
     shows_map = dict(shows_q.all())
@@ -316,7 +316,7 @@ async def get_public_profile(
     # --- Stats ---
     watched_q = await db.execute(
         select(func.count(func.distinct(WatchEvent.media_id)))
-        .where(WatchEvent.user_id == user_id)
+        .where(WatchEvent.user_id == user_id, WatchEvent.completed == True)
     )
     total_watched = watched_q.scalar_one()
 
@@ -329,7 +329,7 @@ async def get_public_profile(
     movies_q = await db.execute(
         select(func.count(func.distinct(WatchEvent.media_id)))
         .join(Media, WatchEvent.media_id == Media.id)
-        .where(WatchEvent.user_id == user_id, Media.media_type == "movie")
+        .where(WatchEvent.user_id == user_id, WatchEvent.completed == True, Media.media_type == "movie")
     )
     movies_watched = movies_q.scalar_one()
 
@@ -337,7 +337,7 @@ async def get_public_profile(
         select(func.count(func.distinct(ShowModel.id)))
         .join(Media, Media.show_id == ShowModel.id)
         .join(WatchEvent, WatchEvent.media_id == Media.id)
-        .where(WatchEvent.user_id == user_id)
+        .where(WatchEvent.user_id == user_id, WatchEvent.completed == True)
     )
     shows_watched = shows_q.scalar_one()
 
@@ -351,7 +351,7 @@ async def get_public_profile(
     rw_movies_q = await db.execute(
         select(WatchEvent, Media)
         .join(Media, WatchEvent.media_id == Media.id)
-        .where(WatchEvent.user_id == user_id, Media.media_type == "movie")
+        .where(WatchEvent.user_id == user_id, WatchEvent.completed == True, Media.media_type == "movie")
         .order_by(WatchEvent.watched_at.desc())
         .limit(12)
     )
@@ -371,7 +371,7 @@ async def get_public_profile(
         select(WatchEvent, Media, ShowModel)
         .join(Media, WatchEvent.media_id == Media.id)
         .outerjoin(ShowModel, Media.show_id == ShowModel.id)
-        .where(WatchEvent.user_id == user_id, Media.media_type == "episode")
+        .where(WatchEvent.user_id == user_id, WatchEvent.completed == True, Media.media_type == "episode")
         .order_by(WatchEvent.watched_at.desc())
         .limit(12)
     )
@@ -648,7 +648,7 @@ async def get_user_stats(
     await _check_profile_access(user_id, current_user, db)
 
     # Date range filters applied to all WatchEvent queries
-    date_filters = []
+    date_filters = [WatchEvent.completed == True]
     if since:
         date_filters.append(WatchEvent.watched_at >= since)
     if until:
@@ -898,7 +898,7 @@ async def get_user_stats(
     watched_movie_ids_sub = (
         select(WatchEvent.media_id)
         .join(Media, WatchEvent.media_id == Media.id)
-        .where(WatchEvent.user_id == user_id, Media.media_type == "movie")
+        .where(WatchEvent.user_id == user_id, WatchEvent.completed == True, Media.media_type == "movie")
         .scalar_subquery()
     )
     unwatched_movies_q = await db.execute(
@@ -918,7 +918,7 @@ async def get_user_stats(
         .join(Media, Media.show_id == ShowModel.id)
         .join(Collection, Collection.media_id == Media.id)
         .join(WatchEvent, WatchEvent.media_id == Media.id)
-        .where(Collection.user_id == user_id, WatchEvent.user_id == user_id)
+        .where(Collection.user_id == user_id, WatchEvent.user_id == user_id, WatchEvent.completed == True)
     )
     shows_watched_collected = watched_shows_collected_q.scalar_one()
 
