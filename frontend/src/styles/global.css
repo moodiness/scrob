@@ -325,3 +325,17 @@ html.blur-explicit [data-adult-backdrop="true"] img {
   background: var(--color-bg-card);
   color: var(--color-text-dim);
 }
+
+/* ── Subtitle Cues ───────────────────────────────────────────────────────── */
+video::cue,
+::cue {
+  background: transparent !important;
+  color: #ffffff !important;
+  text-shadow: 0 0 4px rgba(0, 0, 0, 0.9), 0 0 4px rgba(0, 0, 0, 0.9) !important;
+}
+
+video::-webkit-media-text-track-display,
+video::-webkit-media-text-track-display-backdrop,
+video::-webkit-media-text-track-container {
+  font-size: clamp(1.1rem, 2vw, 2.2rem) !important;
+}
