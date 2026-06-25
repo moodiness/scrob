@@ -549,15 +549,31 @@ async def mark_as_watched(
     current_user: User = Depends(get_current_user),
 ):
     # 1. Check if Media exists locally
-    query = select(Media).where(
-        Media.tmdb_id == event_in.tmdb_id, Media.media_type == event_in.media_type
-    )
-    result = await db.execute(query)
-    media = result.scalar_one_or_none()
+    media = None
+
+    if event_in.media_type == MediaType.episode and event_in.series_tmdb_id and event_in.season_number is not None and event_in.episode_number is not None:
+        # For episodes, prefer looking up by show + season + episode since tmdb_id
+        # may not be set on Media records created via TVDB or webhook paths.
+        show_result = await db.execute(select(Show).where(Show.tmdb_id == event_in.series_tmdb_id))
+        show = show_result.scalar_one_or_none()
+        if show:
+            ep_result = await db.execute(
+                select(Media)
+                .where(Media.media_type == MediaType.episode)
+                .where(Media.show_id == show.id)
+                .where(Media.season_number == event_in.season_number)
+                .where(Media.episode_number == event_in.episode_number)
+            )
+            media = ep_result.scalars().first()
+
+    if not media:
+        result = await db.execute(
+            select(Media).where(Media.tmdb_id == event_in.tmdb_id, Media.media_type == event_in.media_type)
+        )
+        media = result.scalar_one_or_none()
 
     # 2. If not, create Media record from TMDB
     if not media:
-        # Get user's TMDB key if available
         from routers.media import get_user_tmdb_key
 
         api_key = await get_user_tmdb_key(db, current_user.id)
@@ -565,17 +581,33 @@ async def mark_as_watched(
         try:
             if event_in.media_type == MediaType.movie:
                 data = await tmdb.get_movie(event_in.tmdb_id, api_key=api_key)
-                title = data.get("title")
+                media = Media(
+                    tmdb_id=event_in.tmdb_id, media_type=event_in.media_type, title=data.get("title")
+                )
+                db.add(media)
+                await db.flush()
+                await enrich_media(media, api_key=api_key)
+            elif event_in.media_type == MediaType.episode and event_in.series_tmdb_id and event_in.season_number is not None and event_in.episode_number is not None:
+                ep_data = await tmdb.get_episode(
+                    event_in.series_tmdb_id, event_in.season_number, event_in.episode_number, api_key=api_key
+                )
+                show_result = await db.execute(select(Show).where(Show.tmdb_id == event_in.series_tmdb_id))
+                show = show_result.scalar_one_or_none()
+                media = Media(
+                    tmdb_id=ep_data.get("id"),
+                    media_type=MediaType.episode,
+                    title=ep_data.get("name"),
+                    season_number=event_in.season_number,
+                    episode_number=event_in.episode_number,
+                    show_id=show.id if show else None,
+                )
+                db.add(media)
+                await db.flush()
+                await enrich_media(media, api_key=api_key, series_tmdb_id=event_in.series_tmdb_id)
             else:
-                data = await tmdb.get_show(event_in.tmdb_id, api_key=api_key)
-                title = data.get("name")
-
-            media = Media(
-                tmdb_id=event_in.tmdb_id, media_type=event_in.media_type, title=title
-            )
-            db.add(media)
-            await db.flush()
-            await enrich_media(media, api_key=api_key)
+                raise HTTPException(status_code=404, detail="Episode context required (series_tmdb_id, season_number, episode_number)")
+        except HTTPException:
+            raise
         except Exception as e:
             raise HTTPException(status_code=404, detail=f"TMDB Media not found: {e}")
 

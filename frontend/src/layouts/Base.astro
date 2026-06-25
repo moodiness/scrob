@@ -980,6 +980,9 @@ const bottomNavItem = (active: boolean) =>
     let _watchHistoryTmdbId = '';
     let _watchHistoryMediaType = '';
     let _watchHistoryUseNow = true;
+    let _watchHistoryShowTmdbId = '';
+    let _watchHistorySeasonNumber = '';
+    let _watchHistoryEpisodeNumber = '';
 
     const toLocal = (d: Date) => {
       const p = (n: number) => String(n).padStart(2, '0');
@@ -991,9 +994,12 @@ const bottomNavItem = (active: boolean) =>
       document.getElementById('watch-history-modal')!.classList.add('hidden');
     }
 
-    async function openWatchHistoryModal(_btn: HTMLElement, tmdbId: string, mediaType: string) {
+    async function openWatchHistoryModal(_btn: HTMLElement, tmdbId: string, mediaType: string, showTmdbId = '', seasonNumber = '', episodeNumber = '') {
       _watchHistoryTmdbId = tmdbId;
       _watchHistoryMediaType = mediaType;
+      _watchHistoryShowTmdbId = showTmdbId;
+      _watchHistorySeasonNumber = seasonNumber;
+      _watchHistoryEpisodeNumber = episodeNumber;
 
       // Reset "add play" form to "Just now"
       _watchHistoryUseNow = true;
@@ -1092,12 +1098,18 @@ const bottomNavItem = (active: boolean) =>
         logBtn.disabled = true;
         logBtn.textContent = 'Logging…';
         try {
-          await apiFetch('/history', 'POST', {
+          const watchBody: Record<string, unknown> = {
             tmdb_id: Number(_watchHistoryTmdbId),
             media_type: _watchHistoryMediaType,
             completed: true,
             watched_at: watchedAt,
-          });
+          };
+          if (_watchHistoryMediaType === 'episode' && _watchHistoryShowTmdbId) {
+            watchBody.series_tmdb_id = Number(_watchHistoryShowTmdbId);
+            if (_watchHistorySeasonNumber) watchBody.season_number = Number(_watchHistorySeasonNumber);
+            if (_watchHistoryEpisodeNumber) watchBody.episode_number = Number(_watchHistoryEpisodeNumber);
+          }
+          await apiFetch('/history', 'POST', watchBody);
           await loadWatchHistoryEvents();
           // Reset to "Just now" after logging
           _watchHistoryUseNow = true;
@@ -1141,7 +1153,7 @@ const bottomNavItem = (active: boolean) =>
         const seriesId = showTmdbId || tmdbId;
 
         if (mediaType === 'movie' || mediaType === 'episode') {
-          await openWatchHistoryModal(btn, tmdbId, mediaType);
+          await openWatchHistoryModal(btn, tmdbId, mediaType, card.dataset.showTmdbId || '', card.dataset.season || '', card.dataset.episodeNumber || '');
           return;
         }
 

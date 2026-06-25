@@ -209,6 +209,9 @@ class WatchEventCreate(BaseModel):
     media_type: MediaType
     watched_at: Optional[datetime] = None
     completed: bool = True
+    series_tmdb_id: Optional[int] = None
+    season_number: Optional[int] = None
+    episode_number: Optional[int] = None
 
 
 class ManualSessionStart(BaseModel):
