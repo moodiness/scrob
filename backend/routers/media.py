@@ -3348,7 +3348,7 @@ async def get_subtitle(
             f"/{cf.source_id}/Subtitles/{stream_index}/0/Stream.vtt"
         )
         async with httpx.AsyncClient(timeout=httpx.Timeout(30.0)) as client:
-            res = await client.get(sub_url, headers={"X-Emby-Token": conn.token})
+            res = await client.get(sub_url, headers={"Authorization": f'MediaBrowser Token="{conn.token}"'})
         if res.status_code >= 400:
             raise HTTPException(502, "Subtitle not available")
         return Response(content=res.content, media_type="text/vtt", headers=cache_headers)
@@ -3453,7 +3453,7 @@ async def stream_media(
     upstream_headers["Range"] = range_header if range_header else "bytes=0-"
 
     if cf.source.value in ("jellyfin", "emby"):
-        upstream_headers["X-Emby-Token"] = conn.token
+        upstream_headers["Authorization"] = f'MediaBrowser Token="{conn.token}"'
         stream_url = f"{conn.url.rstrip('/')}/Videos/{cf.source_id}/stream"
         params: dict = {"Static": "true"}
     elif cf.source.value == "plex":
@@ -3608,7 +3608,7 @@ async def hls_master_manifest(
     media_source_id = cf.source_id
     try:
         info_url = f"{conn.url.rstrip('/')}/Items/{cf.source_id}/PlaybackInfo"
-        common_headers = {"X-Emby-Token": conn.token, "Content-Type": "application/json"}
+        common_headers = {"Authorization": f'MediaBrowser Token="{conn.token}"', "Content-Type": "application/json"}
         async with httpx.AsyncClient(timeout=10) as info_client:
             if conn.type == "emby":
                 # Emby requires POST to initialise the transcoding session and bind PlaySessionId
@@ -3656,7 +3656,7 @@ async def hls_master_manifest(
             res = await client.get(
                 manifest_url,
                 params=params,
-                headers={"X-Emby-Token": conn.token},
+                headers={"Authorization": f'MediaBrowser Token="{conn.token}"'},
             )
         if res.status_code != 200:
             logger.warning("jellyfin/emby hls manifest %s: %s", res.status_code, res.text[:300])
@@ -3851,7 +3851,7 @@ async def hls_segment_proxy(
         if session_id:
             seg_headers["X-Plex-Client-Identifier"] = session_id
     else:
-        seg_headers = {"X-Emby-Token": conn_token}
+        seg_headers = {"Authorization": f'MediaBrowser Token="{conn_token}"'}
 
     try:
         client = httpx.AsyncClient(timeout=httpx.Timeout(None))
@@ -3948,16 +3948,15 @@ async def report_session(
         async with httpx.AsyncClient(timeout=httpx.Timeout(10.0)) as client:
             if cf.source.value in ("jellyfin", "emby"):
                 pos_ticks = body.position_ms * 10_000  # Jellyfin uses 100-nanosecond ticks
-                # X-Emby-Authorization is required for Jellyfin/Emby to associate the
-                # playback report with a client session and show it in "Now Playing".
+                # Authorization with full MediaBrowser scheme is required for
+                # Jellyfin/Emby to associate the playback report with a client
+                # session and show it in "Now Playing".
                 device_id = f"scrob-{current_user.id}"
-                auth_header = (
-                    f'MediaBrowser Token="{conn.token}", Device="Scrob",'
-                    f' DeviceId="{device_id}", Version="1.0.0"'
-                )
                 headers = {
-                    "X-Emby-Token": conn.token,
-                    "X-Emby-Authorization": auth_header,
+                    "Authorization": (
+                        f'MediaBrowser Token="{conn.token}", Device="Scrob",'
+                        f' DeviceId="{device_id}", Version="1.0.0"'
+                    ),
                     "Content-Type": "application/json",
                 }
                 base = conn.url.rstrip("/")
