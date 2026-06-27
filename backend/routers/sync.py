@@ -1586,6 +1586,129 @@ async def _run_plex_sync(user_id: int, job_id: int, movie_limit: int, show_limit
                         )
                         all_warnings.extend(w)
 
+            # ── Plex watchlist → Scrob list ──────────────────────────────────
+            if conn.plex_sync_watchlist:
+                from models.lists import List as ListModel, ListItem
+                PLEX_WATCHLIST_SLUG = "__plex_watchlist__"
+                print(f"  Fetching Plex watchlist...")
+                try:
+                    wl_items = await plex.get_watchlist(p_token)
+                    print(f"  {len(wl_items)} items in Plex watchlist")
+
+                    wl_result = await db.execute(
+                        select(ListModel).where(
+                            ListModel.user_id == user_id,
+                            ListModel.trakt_slug == PLEX_WATCHLIST_SLUG,
+                        )
+                    )
+                    watchlist = wl_result.scalar_one_or_none()
+                    if not watchlist:
+                        watchlist = ListModel(user_id=user_id, name="Plex - Watchlist", trakt_slug=PLEX_WATCHLIST_SLUG)
+                        db.add(watchlist)
+                        await db.flush()
+
+                    existing_result = await db.execute(
+                        select(ListItem.media_id).where(ListItem.list_id == watchlist.id)
+                    )
+                    wl_existing_ids: set[int] = {row[0] for row in existing_result}
+
+                    # Build set of TMDB IDs currently on Plex watchlist
+                    plex_tmdb_ids: set[int] = set()
+                    for item in wl_items:
+                        for guid in item.get("Guid", []):
+                            gid = guid.get("id", "")
+                            if gid.startswith("tmdb://"):
+                                try:
+                                    plex_tmdb_ids.add(int(gid[7:]))
+                                except ValueError:
+                                    pass
+
+                    # Remove items no longer on Plex watchlist
+                    if wl_existing_ids:
+                        stale_result = await db.execute(
+                            select(Media).where(
+                                Media.id.in_(wl_existing_ids),
+                                Media.tmdb_id.notin_(plex_tmdb_ids) if plex_tmdb_ids else Media.tmdb_id.isnot(None),
+                            )
+                        )
+                        for stale in stale_result.scalars():
+                            await db.execute(
+                                ListItem.__table__.delete().where(
+                                    ListItem.list_id == watchlist.id,
+                                    ListItem.media_id == stale.id,
+                                )
+                            )
+                            wl_existing_ids.discard(stale.id)
+
+                    # Add new items
+                    for item in wl_items:
+                        item_type = item.get("type")  # "movie" or "show"
+                        tmdb_id_item: int | None = None
+                        for guid in item.get("Guid", []):
+                            gid = guid.get("id", "")
+                            if gid.startswith("tmdb://"):
+                                try:
+                                    tmdb_id_item = int(gid[7:])
+                                except ValueError:
+                                    pass
+                        if not tmdb_id_item:
+                            continue
+                        try:
+                            if item_type == "movie":
+                                media_result = await db.execute(
+                                    select(Media).where(Media.tmdb_id == tmdb_id_item, Media.media_type == MediaType.movie)
+                                )
+                                media = media_result.scalar_one_or_none()
+                                if not media:
+                                    d = await tmdb.get_movie(tmdb_id_item, api_key=tmdb_api_key)
+                                    media = Media(
+                                        tmdb_id=tmdb_id_item,
+                                        media_type=MediaType.movie,
+                                        title=d.get("title") or item.get("title", ""),
+                                        poster_path=tmdb.poster_url(d.get("poster_path")),
+                                        backdrop_path=tmdb.poster_url(d.get("backdrop_path"), size="w1280"),
+                                        release_date=d.get("release_date"),
+                                        tmdb_rating=d.get("vote_average"),
+                                        overview=d.get("overview"),
+                                        adult=d.get("adult", False),
+                                    )
+                                    db.add(media)
+                                    await db.flush()
+                            elif item_type == "show":
+                                media_result = await db.execute(
+                                    select(Media).where(Media.tmdb_id == tmdb_id_item, Media.media_type == MediaType.series)
+                                )
+                                media = media_result.scalar_one_or_none()
+                                if not media:
+                                    d = await tmdb.get_show(tmdb_id_item, api_key=tmdb_api_key)
+                                    media = Media(
+                                        tmdb_id=tmdb_id_item,
+                                        media_type=MediaType.series,
+                                        title=d.get("name") or item.get("title", ""),
+                                        poster_path=tmdb.poster_url(d.get("poster_path")),
+                                        backdrop_path=tmdb.poster_url(d.get("backdrop_path"), size="w1280"),
+                                        release_date=d.get("first_air_date"),
+                                        tmdb_rating=d.get("vote_average"),
+                                        overview=d.get("overview"),
+                                        adult=d.get("adult", False),
+                                    )
+                                    db.add(media)
+                                    await db.flush()
+                            else:
+                                continue
+
+                            if media and media.id not in wl_existing_ids:
+                                db.add(ListItem(list_id=watchlist.id, media_id=media.id))
+                                wl_existing_ids.add(media.id)
+                        except Exception as exc:
+                            print(f"  Warning: failed to sync Plex watchlist item tmdb={tmdb_id_item}: {exc}")
+
+                    await db.commit()
+                    print(f"  Plex watchlist sync complete.")
+                except Exception as exc:
+                    print(f"  Warning: Plex watchlist sync failed: {exc}")
+                    await db.rollback()
+
             backfilled = await _backfill_plex_languages(user_id, conn.id, p_url, p_token, job_id)
             if backfilled:
                 print(f"Plex sync job {job_id}: backfilled language data for {backfilled} file(s).")

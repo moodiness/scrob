@@ -40,4 +40,8 @@ class MediaServerConnection(Base):
     watchlist_monitored_users : Mapped[Optional[list]] = mapped_column(JSONB, nullable=True)
     watchlist_synced_ids      : Mapped[Optional[list]] = mapped_column(JSONB, nullable=True)
 
+    # Plex watchlist ↔ Scrob list sync (Plex connections only)
+    plex_sync_watchlist : Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
+    plex_push_watchlist : Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
+
     created_at       : Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=False)

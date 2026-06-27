@@ -144,6 +144,8 @@ class MediaServerConnectionBase(BaseModel):
     watchlist_to_sonarr: bool = False
     watchlist_all_users: bool = False
     watchlist_monitored_users: Optional[list[str]] = None
+    plex_sync_watchlist: bool = False
+    plex_push_watchlist: bool = False
 
 
 class MediaServerConnectionCreate(MediaServerConnectionBase):
@@ -167,6 +169,8 @@ class MediaServerConnectionUpdate(BaseModel):
     watchlist_to_sonarr: Optional[bool] = None
     watchlist_all_users: Optional[bool] = None
     watchlist_monitored_users: Optional[list[str]] = None
+    plex_sync_watchlist: Optional[bool] = None
+    plex_push_watchlist: Optional[bool] = None
 
 
 class MediaServerConnectionResponse(MediaServerConnectionBase):

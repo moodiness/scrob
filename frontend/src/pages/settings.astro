@@ -239,10 +239,11 @@ if (me.totp_enabled) {
                       <div class="bg-zinc-950 rounded-xl p-4 space-y-3">
                         <p class="text-xs font-semibold uppercase tracking-wide text-zinc-500">{typeLabel} → Scrob</p>
                         {[
-                          { key: "sync_collection", label: "Collection status" },
-                          { key: "sync_watched",    label: "Watched status" },
-                          { key: "sync_ratings",    label: "Ratings" },
-                          { key: "sync_playback",   label: "Playback events" },
+                          { key: "sync_collection",   label: "Collection status" },
+                          { key: "sync_watched",      label: "Watched status" },
+                          { key: "sync_ratings",      label: "Ratings" },
+                          { key: "sync_playback",     label: "Playback events" },
+                          ...(conn.type === "plex" ? [{ key: "plex_sync_watchlist", label: "Watchlist" }] : []),
                         ].map(({ key, label }) => (
                           <label class="flex items-center gap-3 cursor-pointer group">
                             <input type="checkbox" class="conn-pref-checkbox w-4 h-4 rounded cursor-pointer" data-conn-id={conn.id} data-pref={key} checked={conn[key as keyof typeof conn] !== false} />
@@ -263,6 +264,7 @@ if (me.totp_enabled) {
                         {[
                           { key: "push_watched", label: "Watched status" },
                           { key: "push_ratings", label: "Ratings" },
+                          ...(conn.type === "plex" ? [{ key: "plex_push_watchlist", label: "Watchlist" }] : []),
                         ].map(({ key, label }) => (
                           <label class="flex items-center gap-3 cursor-pointer group">
                             <input type="checkbox" class="conn-pref-checkbox w-4 h-4 rounded cursor-pointer" data-conn-id={conn.id} data-pref={key} checked={!!conn[key as keyof typeof conn]} />
