@@ -1,4 +1,5 @@
 import asyncio
+import logging
 import re
 from fastapi import APIRouter, Depends, Query, HTTPException, BackgroundTasks
 from pydantic import BaseModel
@@ -30,6 +31,8 @@ from core.enrichment import enrich_media
 from core.image_cache import pre_cache_all_collected_bg
 
 from dependencies import get_current_user
+logger = logging.getLogger("uvicorn.error")
+
 
 
 async def _get_effective_tmdb_key(db: AsyncSession, user_settings: UserSettings | None) -> str | None:
@@ -1890,13 +1893,18 @@ async def _resolve_nuvio_tmdb_ids(
                 if matches and matches[0].get("id") is not None:
                     resolved[content_id] = int(matches[0]["id"])
             except Exception as exc:
-                print(f"  Failed to resolve Nuvio IMDb ID {content_id} through TMDB: {exc}")
+                logger.warning(
+                    "Failed to resolve Nuvio IMDb ID %s through TMDB: %s",
+                    content_id,
+                    exc,
+                )
 
     if unresolved:
         await asyncio.gather(*(resolve_imdb_id(content_id) for content_id in sorted(unresolved)))
-        print(
-            f"  Resolved {len(unresolved & set(resolved))}/{len(unresolved)} "
-            "new Nuvio IMDb IDs through TMDB"
+        logger.info(
+            "Resolved %s/%s new Nuvio IMDb IDs through TMDB",
+            len(unresolved & set(resolved)),
+            len(unresolved),
         )
     return resolved
 
@@ -2071,7 +2079,7 @@ async def _run_nuvio_sync(
     show_limit: int,
     connection_id: int | None = None,
 ):
-    print(f"Starting Nuvio sync for user {user_id}, job {job_id}")
+    logger.info("Starting Nuvio sync for user %s, job %s", user_id, job_id)
     async_session = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
     async with async_session() as db:
         try:
@@ -2115,12 +2123,18 @@ async def _run_nuvio_sync(
             library_records = data["library"] if conn.sync_collection else []
             watched_records = data["watched"] if conn.sync_watched else []
             progress_records = data["progress"] if conn.sync_playback else []
-            print(
-                f"Nuvio profile {conn.server_username or f'#{profile_id}'} (index #{profile_id}): "
-                f"pulled {len(data['library'])} library, {len(data['watched'])} watched, "
-                f"and {len(data['progress'])} progress records; enabled for this sync: "
-                f"{len(library_records)} library, {len(watched_records)} watched, "
-                f"{len(progress_records)} progress"
+            logger.info(
+                "Nuvio profile %s (index #%s): pulled %s library, %s watched, "
+                "and %s progress records; enabled for this sync: %s library, "
+                "%s watched, %s progress",
+                conn.server_username or f"#{profile_id}",
+                profile_id,
+                len(data["library"]),
+                len(data["watched"]),
+                len(data["progress"]),
+                len(library_records),
+                len(watched_records),
+                len(progress_records),
             )
 
             all_nuvio_records = [*library_records, *watched_records, *progress_records]
@@ -2282,12 +2296,9 @@ async def _run_nuvio_sync(
             )
             await db.commit()
             asyncio.create_task(pre_cache_all_collected_bg())
-            print(f"Nuvio sync job {job_id} completed. Stats: {stats}")
+            logger.info("Nuvio sync job %s completed. Stats: %s", job_id, stats)
         except Exception as exc:
-            print(f"Nuvio sync job {job_id} failed: {exc}")
-            import traceback
-
-            traceback.print_exc()
+            logger.exception("Nuvio sync job %s failed", job_id)
             await db.rollback()
             await db.execute(
                 update(SyncJob)
@@ -2602,7 +2613,11 @@ async def _run_full_push(user_id: int, connection_id: int, job_id: int) -> None:
                     )
                 )
                 await db.commit()
-                print(f"Full Nuvio push for connection {connection_id}: {total} watched items")
+                logger.info(
+                    "Full Nuvio push for connection %s: %s watched items",
+                    connection_id,
+                    total,
+                )
                 return
 
             conn_source = CollectionSource(conn.type)
