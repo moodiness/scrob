@@ -2438,6 +2438,26 @@ if (me.totp_enabled) {
     });
   }
 
+  async function persistMdblistPreferences(keys: string[]) {
+    const preferences = Object.fromEntries(keys.map(key => {
+      const input = document.querySelector<HTMLInputElement>(`input[name="${key}"]`);
+      return [key, input?.checked ?? false];
+    }));
+    const res = await fetch('/api/proxy/auth/settings', {
+      method: 'PATCH',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(preferences),
+    });
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      throw new Error(data.detail || 'Failed to save MDBList options');
+    }
+  }
+
+
   function setupActions() {
     const btns = document.querySelectorAll('.js-action-btn');
     btns.forEach(btn => {
@@ -2856,6 +2876,7 @@ if (me.totp_enabled) {
               empty
             );
             if (!ok) return;
+            await persistMdblistPreferences(Object.keys(labels));
             url = '/api/proxy/mdblist/sync';
           } else if (action === 'push_mdblist') {
             const labels: Record<string, string> = {
@@ -2876,6 +2897,7 @@ if (me.totp_enabled) {
               empty
             );
             if (!ok) return;
+            await persistMdblistPreferences(Object.keys(labels));
             url = '/api/proxy/mdblist/push';
           }
 
