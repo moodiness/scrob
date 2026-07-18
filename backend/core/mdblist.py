@@ -70,15 +70,15 @@ async def _get_all(api_key: str, path: str) -> dict[str, Any]:
         "episodes": [],
     }
     cursor: str | None = None
-    offset = 0
+    total_seen = 0
     seen_cursors: set[str] = set()
 
     while True:
         params: dict[str, Any] = {"limit": PAGE_SIZE}
         if cursor:
             params["cursor"] = cursor
-        elif offset:
-            params["offset"] = offset
+        elif total_seen:
+            params["offset"] = total_seen
 
         page = await _request("GET", path, api_key, params=params)
         page_count = 0
@@ -87,6 +87,7 @@ async def _get_all(api_key: str, path: str) -> dict[str, Any]:
             if isinstance(values, list):
                 merged[key].extend(values)
                 page_count += len(values)
+        total_seen += page_count
 
         pagination = page.get("pagination")
         pagination = pagination if isinstance(pagination, dict) else {}
@@ -102,7 +103,6 @@ async def _get_all(api_key: str, path: str) -> dict[str, Any]:
         if pagination.get("has_more"):
             if page_count == 0:
                 raise MDBListAPIError(f"MDBList {path} reported more pages without returning items")
-            offset += page_count
             cursor = None
             continue
         break
