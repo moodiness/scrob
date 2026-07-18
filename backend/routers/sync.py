@@ -66,6 +66,25 @@ async def _select_in_chunks(db: AsyncSession, stmt_builder, ids: list):
     return results
 
 
+async def _latest_watched_at(db: AsyncSession, user_id: int, media_ids: list) -> dict:
+    """Latest completed WatchEvent.watched_at per media_id, chunked to avoid the 32767-parameter limit."""
+    watched_at_by_media: dict[int, datetime] = {}
+    for i in range(0, len(media_ids), _MAX_IN_PARAMS):
+        chunk = media_ids[i : i + _MAX_IN_PARAMS]
+        result = await db.execute(
+            select(WatchEvent.media_id, WatchEvent.watched_at)
+            .where(
+                WatchEvent.user_id == user_id,
+                WatchEvent.media_id.in_(chunk),
+                WatchEvent.completed == True,
+            )
+            .order_by(WatchEvent.watched_at.desc())
+        )
+        for media_id, watched_at in result.all():
+            watched_at_by_media.setdefault(media_id, watched_at)
+    return watched_at_by_media
+
+
 def extract_watch_state(item: dict, source: CollectionSource) -> dict:
     state = {"completed": False, "last_played": None, "play_count": 0, "user_rating": None}
 
@@ -293,13 +312,7 @@ async def batch_enrich_items(
 
 
 def _nuvio_profile_id(conn: MediaServerConnection) -> int:
-    try:
-        profile_id = int(conn.server_user_id or "")
-    except ValueError:
-        raise RuntimeError("Invalid Nuvio profile index")
-    if profile_id < 1 or profile_id > 6:
-        raise RuntimeError("Invalid Nuvio profile index")
-    return profile_id
+    return nuvio.parse_profile_id(conn.server_user_id)
 
 
 def _nuvio_imdb_id(entity: Media | Show | None) -> str | None:
@@ -470,7 +483,7 @@ def _nuvio_progress_item(
     if media.runtime and media.runtime > 0:
         duration_ms = media.runtime * 60_000
     else:
-        duration_ms = round(position_ms / min(progress_percent, 1.0))
+        duration_ms = round(position_ms / max(min(progress_percent, 1.0), 0.01))
     duration_ms = max(position_ms, duration_ms)
 
     updated_at = progress.updated_at
@@ -721,19 +734,35 @@ async def _fan_out_changes_to_other_connections(
         mdblist_media_by_id = {media.id: media for media in mdblist_media}
 
         if push_mdblist_watched:
+            watched_at_by_media = await _latest_watched_at(db, user_id, list(new_watched_ids))
+
             watched_payload = _empty_payload()
             for media_id in new_watched_ids:
                 media = mdblist_media_by_id.get(media_id)
-                item = _payload_item(media, watched_at=datetime.utcnow()) if media else None
+                item = _payload_item(media, watched_at=watched_at_by_media.get(media_id, datetime.utcnow())) if media else None
                 if item:
                     watched_payload[item[0]].append(item[1])
             push_tasks.append(mdblist_client.push_watched(settings.mdblist_api_key, watched_payload))
 
         if push_mdblist_ratings:
+            rated_media_ids = list(new_ratings.keys())
+            rated_at_by_media: dict[int, datetime] = {}
+            for i in range(0, len(rated_media_ids), _MAX_IN_PARAMS):
+                chunk = rated_media_ids[i : i + _MAX_IN_PARAMS]
+                rated_at_result = await db.execute(
+                    select(Rating.media_id, Rating.rated_at).where(
+                        Rating.user_id == user_id, Rating.media_id.in_(chunk)
+                    )
+                )
+                rated_at_by_media.update(dict(rated_at_result.all()))
             ratings_payload = _empty_payload()
             for media_id, rating in new_ratings.items():
                 media = mdblist_media_by_id.get(media_id)
-                item = _payload_item(media, rating=rating) if media else None
+                item = (
+                    _payload_item(media, rating=rating, rated_at=rated_at_by_media.get(media_id))
+                    if media
+                    else None
+                )
                 if item:
                     ratings_payload[item[0]].append(item[1])
             push_tasks.append(mdblist_client.push_ratings(settings.mdblist_api_key, ratings_payload))
@@ -2455,7 +2484,7 @@ async def _run_nuvio_sync(
                 )
                 warnings.extend(group_warnings)
 
-            for media_type in (MediaType.movie, MediaType.series):
+            for media_type in (MediaType.movie, MediaType.series, MediaType.episode):
                 await sync_group(
                     normalized_library,
                     media_type,
@@ -2487,6 +2516,7 @@ async def _run_nuvio_sync(
                 new_watched_ids,
                 {},
                 settings=settings,
+                exclude_cloud_source=CollectionSource.nuvio,
             )
             warnings = await _stamp_matched_show_warnings(db, user_id, warnings)
             await db.execute(
@@ -3072,7 +3102,7 @@ async def push_upstream(
     current_user: User = Depends(get_current_user),
 ):
     conn = await _get_connection_or_404(db, connection_id, current_user.id)
-    if not conn.push_watched and not conn.push_ratings:
+    if not conn.push_watched and not conn.push_ratings and not conn.push_playback:
         raise HTTPException(status_code=400, detail="Enable 'Scrob → Server' push flags for this connection first")
 
     source_map = {"jellyfin": CollectionSource.jellyfin, "emby": CollectionSource.emby, "plex": CollectionSource.plex, "nuvio": CollectionSource.nuvio}

@@ -1,4 +1,5 @@
 import asyncio
+import logging
 from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -26,6 +27,7 @@ import core.trakt as trakt_client
 import core.nuvio as nuvio_client
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 
 async def _push_watch_state(
@@ -136,11 +138,16 @@ async def _push_watch_state(
     if push_mdblist:
         from core import mdblist as mdblist_client
         from routers.mdblist import _empty_payload, _payload_item
+        from routers.sync import _latest_watched_at
+
+        mdblist_watched_at: dict[int, datetime] = {}
+        if watched:
+            mdblist_watched_at = await _latest_watched_at(db, user_id, media_ids)
 
         mdblist_payload = _empty_payload()
         media_result = await db.execute(select(Media).where(Media.id.in_(media_ids)))
         for media in media_result.scalars().all():
-            item = _payload_item(media, watched_at=datetime.utcnow()) if watched else _payload_item(media)
+            item = _payload_item(media, watched_at=mdblist_watched_at.get(media.id, datetime.utcnow())) if watched else _payload_item(media)
             if item:
                 mdblist_payload[item[0]].append(item[1])
         operation = mdblist_client.push_watched if watched else mdblist_client.remove_watched
@@ -158,24 +165,14 @@ async def _push_watch_state(
         if show_ids:
             show_result = await db.execute(select(Show).where(Show.id.in_(show_ids)))
             shows_by_id = {show.id: show for show in show_result.scalars().all()}
-        from routers.sync import _ensure_nuvio_imdb_ids, _nuvio_watched_item
+        from routers.sync import _ensure_nuvio_imdb_ids, _latest_watched_at, _nuvio_watched_item
 
         api_key = await get_user_tmdb_key(db, user_id)
         await _ensure_nuvio_imdb_ids(media_items, shows_by_id, api_key)
 
         watched_at_by_media: dict[int, datetime] = {}
         if watched:
-            event_result = await db.execute(
-                select(WatchEvent.media_id, WatchEvent.watched_at)
-                .where(
-                    WatchEvent.user_id == user_id,
-                    WatchEvent.media_id.in_(media_ids),
-                    WatchEvent.completed == True,
-                )
-                .order_by(WatchEvent.watched_at.desc())
-            )
-            for media_id, watched_at in event_result.all():
-                watched_at_by_media.setdefault(media_id, watched_at)
+            watched_at_by_media = await _latest_watched_at(db, user_id, media_ids)
 
         nuvio_items: list[dict] = []
         nuvio_keys: list[dict] = []
@@ -199,9 +196,7 @@ async def _push_watch_state(
 
         for conn in nuvio_connections:
             try:
-                profile_id = int(conn.server_user_id or "")
-                if profile_id < 1 or profile_id > 6:
-                    continue
+                profile_id = nuvio_client.parse_profile_id(conn.server_user_id)
                 if watched and nuvio_items:
                     session = await nuvio_client.push_watched_items(
                         conn.url, conn.token, profile_id, nuvio_items
@@ -214,6 +209,7 @@ async def _push_watch_state(
                     continue
                 conn.token = session.refresh_token
             except Exception:
+                logger.exception("Failed to push watch state to Nuvio connection %s", conn.id)
                 continue
         await db.commit()
 
