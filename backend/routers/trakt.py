@@ -836,7 +836,7 @@ async def run_trakt_sync(user_id: int, job_id: int):
                 f"Errors: {stats['errors']}."
             )
             from routers.sync import _fan_out_changes_to_other_connections
-            await _fan_out_changes_to_other_connections(db, user_id, None, _new_watched, _new_ratings, settings=settings)
+            await _fan_out_changes_to_other_connections(db, user_id, None, _new_watched, _new_ratings, settings=settings, exclude_cloud_source=CollectionSource.trakt)
             await db.execute(
                 update(SyncJob).where(SyncJob.id == job_id).values(
                     status=SyncStatus.completed,
