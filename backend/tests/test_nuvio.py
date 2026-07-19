@@ -437,12 +437,13 @@ class NuvioClientTests(unittest.IsolatedAsyncioTestCase):
 
 
 class NuvioCollectionFanoutTests(unittest.IsolatedAsyncioTestCase):
-    async def test_local_collection_addition_pushes_tmdb_item_to_nuvio(self) -> None:
+    async def test_local_collection_addition_pushes_imdb_item_to_nuvio(self) -> None:
         movie = Media(
             id=10,
             tmdb_id=1368337,
             media_type=MediaType.movie,
             title="The Odyssey",
+            tmdb_data={"external_ids": {"imdb_id": "tt33764258"}},
         )
         conn = SimpleNamespace(
             id=4,
@@ -466,10 +467,16 @@ class NuvioCollectionFanoutTests(unittest.IsolatedAsyncioTestCase):
             commit=AsyncMock(),
         )
 
-        with patch(
-            "routers.sync._push_nuvio_library_delta",
-            AsyncMock(return_value=True),
-        ) as push_delta:
+        with (
+            patch(
+                "routers.sync._get_effective_tmdb_key",
+                AsyncMock(return_value="tmdb-token"),
+            ),
+            patch(
+                "routers.sync._push_nuvio_library_delta",
+                AsyncMock(return_value=True),
+            ) as push_delta,
+        ):
             await _fan_out_changes_to_other_connections(
                 db,
                 user_id=7,
@@ -482,12 +489,12 @@ class NuvioCollectionFanoutTests(unittest.IsolatedAsyncioTestCase):
 
         push_delta.assert_awaited_once()
         _, current_items, changed_ids = push_delta.await_args.args
-        self.assertEqual(changed_ids, {"tmdb:1368337"})
+        self.assertEqual(changed_ids, {"tt33764258"})
         self.assertEqual(
             current_items,
             [
                 {
-                    "content_id": "tmdb:1368337",
+                    "content_id": "tt33764258",
                     "content_type": "movie",
                     "name": "The Odyssey",
                     "poster": None,
@@ -595,7 +602,10 @@ class NuvioNormalizationTests(unittest.TestCase):
             overview="A mysterious island.",
             first_air_date="2004-09-22",
             tmdb_rating=8.0,
-            tmdb_data={"genres": [{"name": "Drama"}]},
+            tmdb_data={
+                "genres": [{"name": "Drama"}],
+                "external_ids": {"imdb_id": "tt0411008"},
+            },
         )
 
         item = _nuvio_library_item(
@@ -605,6 +615,7 @@ class NuvioNormalizationTests(unittest.TestCase):
         )
 
         self.assertIsNotNone(item)
+        self.assertEqual(item["content_id"], "tt0411008")
         self.assertEqual(item["name"], "Lost : Les Disparus")
         self.assertEqual(item["poster"], show.poster_path)
         self.assertEqual(item["background"], show.backdrop_path)
