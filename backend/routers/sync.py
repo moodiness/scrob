@@ -3647,7 +3647,11 @@ async def get_sync_status(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    query = select(SyncJob).where(SyncJob.user_id == current_user.id).order_by(SyncJob.created_at.desc()).limit(5)
+    # A high enough limit that a long-running job (e.g. a large MDBList push) doesn't
+    # fall out of the window just because other sync jobs (connection scans, etc.)
+    # fired while it was still in flight — the frontend pollers each pick out their
+    # own source from this list and would otherwise lose track of it mid-run.
+    query = select(SyncJob).where(SyncJob.user_id == current_user.id).order_by(SyncJob.created_at.desc()).limit(20)
     result = await db.execute(query)
     jobs = result.scalars().all()
     return jobs

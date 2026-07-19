@@ -1772,18 +1772,23 @@ if (me.totp_enabled) {
     return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
   }
 
-  function showMessage(text, type = 'success') {
+  function showMessage(text, type = 'success', opts: { scroll?: boolean } = {}) {
     const msg = document.getElementById('js-message');
     if (!msg) return;
     msg.textContent = text;
     msg.className = `p-4 rounded-lg mb-8 ${
-      type === 'success' 
-        ? 'bg-green-500/10 border border-green-500 text-green-500' 
+      type === 'success'
+        ? 'bg-green-500/10 border border-green-500 text-green-500'
         : 'bg-red-500/10 border border-red-500 text-red-500'
     }`;
     msg.classList.remove('hidden');
-    window.scrollTo({ top: 0, behavior: 'smooth' });
-    
+    // Skip the scroll for actions that already show their own progress bar
+    // (pull/push/sync) — scrolling to top there just hides the progress the
+    // user is meant to watch and forces them to scroll back down to see it.
+    if (opts.scroll !== false) {
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    }
+
     // Always hide after 4 seconds
     if (window._messageTimeout) clearTimeout(window._messageTimeout);
     window._messageTimeout = setTimeout(() => msg.classList.add('hidden'), 4000);
@@ -2046,6 +2051,14 @@ if (me.totp_enabled) {
 
   // ── MDBList progress tracking ─────────────────────────────────────────────
   let mdblistPoller: ReturnType<typeof setTimeout> | null = null;
+  let mdblistHideTimer: ReturnType<typeof setTimeout> | null = null;
+  // The job id we last observed as pending/running. If that exact job later shows
+  // up as completed/failed, we show it regardless of how much wall-clock time has
+  // passed — comparing against job.updated_at alone is unreliable because browsers
+  // throttle setTimeout in backgrounded tabs (e.g. the user switching away to check
+  // mdblist.com while the push runs), which can delay the next poll well past any
+  // fixed "recently completed" window and make the job look stale when it isn't.
+  let mdblistTrackedJobId: number | null = null;
 
   function renderMdblistProgress(job: any) {
     const strip = document.getElementById('mdblist-progress');
@@ -2095,16 +2108,26 @@ if (me.totp_enabled) {
       const jobs: any[] = await res.json();
       const job = jobs.find(j => j.source === 'mdblist');
       const isActive = job && (job.status === 'pending' || job.status === 'running');
-      const isRecentDone = job && (job.status === 'completed' || job.status === 'failed')
-        && new Date(job.updated_at).getTime() > Date.now() - 8000;
-      renderMdblistProgress((isActive || isRecentDone) ? job : null);
+      const isDone = job && (job.status === 'completed' || job.status === 'failed');
+      const isFresh = job && new Date(job.updated_at).getTime() > Date.now() - 8000;
+      const isTrackedJobDone = isDone && job.id === mdblistTrackedJobId;
+
       if (isActive) {
+        mdblistTrackedJobId = job.id;
+        renderMdblistProgress(job);
         mdblistPoller = setTimeout(pollMdblistJob, 2000);
-      } else if (isRecentDone) {
-        mdblistPoller = setTimeout(() => { renderMdblistProgress(null); mdblistPoller = null; }, 4000);
-      } else {
-        mdblistPoller = null;
+        return;
       }
+
+      if (isDone && (isTrackedJobDone || isFresh)) {
+        renderMdblistProgress(job);
+        if (mdblistHideTimer != null) clearTimeout(mdblistHideTimer);
+        mdblistHideTimer = setTimeout(() => { renderMdblistProgress(null); mdblistHideTimer = null; }, 8000);
+      } else {
+        renderMdblistProgress(null);
+      }
+      mdblistTrackedJobId = null;
+      mdblistPoller = null;
     } catch {
       mdblistPoller = null;
     }
@@ -2114,6 +2137,17 @@ if (me.totp_enabled) {
     if (mdblistPoller != null) clearTimeout(mdblistPoller);
     pollMdblistJob();
   }
+
+  document.addEventListener('visibilitychange', () => {
+    // Backgrounded tabs get their setTimeout throttled, which can delay the next
+    // poll long enough that a completed push silently disappears (see note above).
+    // Re-check immediately when the user comes back so they get the real state
+    // right away instead of whatever the delayed timer eventually catches.
+    if (document.visibilityState === 'visible' && mdblistTrackedJobId != null) {
+      if (mdblistPoller != null) clearTimeout(mdblistPoller);
+      pollMdblistJob();
+    }
+  });
 
   // ── Heal progress tracking ────────────────────────────────────────────────
   let healPoller: ReturnType<typeof setTimeout> | null = null;
@@ -2925,7 +2959,10 @@ if (me.totp_enabled) {
           const data = await res.json();
 
           if (res.ok) {
-            showMessage(data.message || 'Action successful!');
+            const showsProgressBar = !!syncConnId || [
+              'sync_trakt', 'push_trakt', 'sync_simkl', 'push_simkl', 'sync_mdblist', 'push_mdblist',
+            ].includes(action);
+            showMessage(data.message || 'Action successful!', 'success', { scroll: !showsProgressBar });
             if (syncConnId) startConnPoller(syncConnId);
             if (action === 'sync_simkl' || action === 'push_simkl') startSimklPoller();
             if (action === 'sync_trakt' || action === 'push_trakt') startTraktPoller();
