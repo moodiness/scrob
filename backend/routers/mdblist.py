@@ -836,3 +836,19 @@ async def push_mdblist(
     await db.refresh(job)
     background_tasks.add_task(run_mdblist_push, current_user.id, job.id)
     return {"status": "started", "job_id": job.id, "message": "MDBList push is running in the background"}
+
+
+@router.delete("/auth/disconnect")
+async def mdblist_disconnect(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Clear the stored MDBList API key."""
+    result = await db.execute(select(UserSettings).where(UserSettings.user_id == current_user.id))
+    settings = result.scalar_one_or_none()
+
+    if settings:
+        settings.mdblist_api_key = None
+        await db.commit()
+
+    return {"status": "disconnected"}
