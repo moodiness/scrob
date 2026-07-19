@@ -218,6 +218,34 @@ def _empty_payload() -> dict[str, list[dict[str, Any]]]:
     return {"movies": [], "shows": [], "seasons": [], "episodes": []}
 
 
+def _merge_show_entries(shows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Combine payload entries that share a show tmdb id.
+
+    _payload_item() builds one entry per season rating, so a batch touching
+    several seasons of the same show would otherwise produce multiple
+    entries with identical ids.tmdb — MDBList's API expects one show object
+    per tmdb id with all of its rated seasons nested underneath.
+    """
+    merged: dict[int, dict[str, Any]] = {}
+    result: list[dict[str, Any]] = []
+    for item in shows:
+        tmdb_id = (item.get("ids") or {}).get("tmdb")
+        if tmdb_id is None:
+            result.append(item)
+            continue
+        existing = merged.get(tmdb_id)
+        if existing is None:
+            existing = {"ids": item["ids"]}
+            merged[tmdb_id] = existing
+            result.append(existing)
+        for key, value in item.items():
+            if key == "seasons":
+                existing.setdefault("seasons", []).extend(value)
+            elif key != "ids":
+                existing[key] = value
+    return result
+
+
 def _payload_item(
     media: Media,
     *,
@@ -701,6 +729,7 @@ async def run_mdblist_push(user_id: int, job_id: int) -> None:
                     settings.mdblist_api_key, watched_payload
                 )
             if settings.mdblist_push_ratings:
+                ratings_payload["shows"] = _merge_show_entries(ratings_payload["shows"])
                 results["ratings"] = await mdblist_client.push_ratings(
                     settings.mdblist_api_key, ratings_payload
                 )

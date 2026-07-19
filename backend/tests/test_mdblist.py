@@ -15,6 +15,7 @@ from models.base import MediaType
 from models.media import Media
 from routers.mdblist import (
     _episode_identity,
+    _merge_show_entries,
     _payload_item,
     _rating_removal_item,
     _resolve_external_tmdb_id,
@@ -277,6 +278,71 @@ class MDBListNormalizationTests(unittest.IsolatedAsyncioTestCase):
             item,
             {
                 "ids": {"tmdb": 1396},
+                "seasons": [{"number": 1}],
+            },
+        )
+
+    def test_merge_show_entries_combines_multiple_seasons_of_same_show(self) -> None:
+        """Regression test: two season ratings for one show must round-trip
+        as a single show object with both seasons nested, not two separate
+        entries sharing the same ids.tmdb."""
+        _, season_one = _payload_item(
+            Media(id=1, tmdb_id=1396, media_type=MediaType.series, title="Breaking Bad"),
+            season_number=1,
+            rating=8.0,
+            rated_at=datetime(2026, 7, 18, 0, 0, 0),
+        )
+        _, season_two = _payload_item(
+            Media(id=1, tmdb_id=1396, media_type=MediaType.series, title="Breaking Bad"),
+            season_number=2,
+            rating=9.0,
+            rated_at=datetime(2026, 7, 18, 0, 0, 0),
+        )
+
+        merged = _merge_show_entries([season_one, season_two])
+
+        self.assertEqual(len(merged), 1)
+        self.assertEqual(merged[0]["ids"], {"tmdb": 1396})
+        self.assertEqual(
+            merged[0]["seasons"],
+            [
+                {"number": 1, "rating": 8.0, "rated_at": "2026-07-18T00:00:00Z"},
+                {"number": 2, "rating": 9.0, "rated_at": "2026-07-18T00:00:00Z"},
+            ],
+        )
+
+    def test_merge_show_entries_keeps_different_shows_separate(self) -> None:
+        _, breaking_bad = _payload_item(
+            Media(id=1, tmdb_id=1396, media_type=MediaType.series, title="Breaking Bad"),
+            season_number=1,
+            rating=8.0,
+        )
+        _, the_wire = _payload_item(
+            Media(id=2, tmdb_id=1438, media_type=MediaType.series, title="The Wire"),
+            season_number=1,
+            rating=10.0,
+        )
+
+        merged = _merge_show_entries([breaking_bad, the_wire])
+
+        self.assertEqual(len(merged), 2)
+        self.assertEqual({item["ids"]["tmdb"] for item in merged}, {1396, 1438})
+
+    def test_merge_show_entries_combines_show_rating_with_season_removal(self) -> None:
+        """A show-level rating and a season removal for the same show must
+        merge into one object rather than clobbering each other."""
+        show_item = {"ids": {"tmdb": 1396}, "rating": 9.0, "rated_at": "2026-07-18T00:00:00Z"}
+        season_removal = {"ids": {"tmdb": 1396}, "seasons": [{"number": 1}]}
+
+        merged = _merge_show_entries([show_item, season_removal])
+
+        self.assertEqual(len(merged), 1)
+        self.assertEqual(
+            merged[0],
+            {
+                "ids": {"tmdb": 1396},
+                "rating": 9.0,
+                "rated_at": "2026-07-18T00:00:00Z",
                 "seasons": [{"number": 1}],
             },
         )

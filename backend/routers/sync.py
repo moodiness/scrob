@@ -870,7 +870,7 @@ async def _fan_out_changes_to_other_connections(
 
     if (push_mdblist_watched or push_mdblist_ratings) and all_changed_ids:
         from core import mdblist as mdblist_client
-        from routers.mdblist import _empty_payload, _payload_item, _rating_removal_item
+        from routers.mdblist import _empty_payload, _merge_show_entries, _payload_item, _rating_removal_item
 
         mdblist_media_by_id = media_by_id
 
@@ -918,6 +918,7 @@ async def _fan_out_changes_to_other_connections(
                 )
                 if item:
                     ratings_payload[item[0]].append(item[1])
+            ratings_payload["shows"] = _merge_show_entries(ratings_payload["shows"])
             push_tasks.append(mdblist_client.push_ratings(settings.mdblist_api_key, ratings_payload))
 
         if push_mdblist_ratings and removed_ratings:
@@ -931,6 +932,7 @@ async def _fan_out_changes_to_other_connections(
                 )
                 if item:
                     removed_payload[item[0]].append(item[1])
+            removed_payload["shows"] = _merge_show_entries(removed_payload["shows"])
             push_tasks.append(
                 mdblist_client.remove_ratings(
                     settings.mdblist_api_key,

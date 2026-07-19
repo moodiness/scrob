@@ -180,6 +180,110 @@ class SeasonRatingFanoutTests(unittest.IsolatedAsyncioTestCase):
             [{"ids": {"tmdb": 1396}, "seasons": [{"number": 1}]}],
         )
 
+    async def test_two_season_ratings_of_same_show_merge_into_one_mdblist_entry(self) -> None:
+        """Regression test: rating two seasons of the same show in one sync
+        must fan out to MDBList as a single show object with both seasons
+        nested, not two entries sharing the same ids.tmdb (which would let
+        one silently clobber the other)."""
+        media = Media(
+            id=1,
+            tmdb_id=1396,
+            media_type=MediaType.series,
+            title="Breaking Bad",
+        )
+        db = SimpleNamespace(
+            execute=AsyncMock(
+                side_effect=[
+                    _scalar_result([media]),
+                    _scalar_result([_plex_connection()]),
+                    _rows_result([]),
+                    _rows_result(
+                        [
+                            (1, 1, datetime(2026, 7, 18, 0, 0, 0)),
+                            (1, 2, datetime(2026, 7, 18, 0, 0, 0)),
+                        ]
+                    ),
+                ]
+            ),
+            commit=AsyncMock(),
+        )
+
+        with (
+            patch(
+                "routers.sync._resolve_tmdb_season_ids",
+                AsyncMock(return_value={(1, 1): 3572, (1, 2): 3573}),
+            ),
+            patch("routers.sync.plex.resolve_season_rating_key", AsyncMock(return_value="103")),
+            patch("routers.sync.plex.set_rating", AsyncMock(return_value=True)),
+            patch("routers.sync.trakt_client.set_ratings_batch", AsyncMock()),
+            patch("core.mdblist.push_ratings", AsyncMock(return_value={})) as push_mdblist,
+        ):
+            await _fan_out_changes_to_other_connections(
+                db,
+                user_id=3,
+                exclude_connection_id=None,
+                new_watched_ids=set(),
+                new_ratings={(1, 1): 8.0, (1, 2): 9.0},
+                settings=_settings(),
+            )
+
+        payload = push_mdblist.await_args.args[1]
+        self.assertEqual(len(payload["shows"]), 1)
+        self.assertEqual(payload["shows"][0]["ids"], {"tmdb": 1396})
+        self.assertEqual(
+            sorted(payload["shows"][0]["seasons"], key=lambda s: s["number"]),
+            [
+                {"number": 1, "rating": 8.0, "rated_at": "2026-07-18T00:00:00Z"},
+                {"number": 2, "rating": 9.0, "rated_at": "2026-07-18T00:00:00Z"},
+            ],
+        )
+
+    async def test_two_season_removals_of_same_show_merge_into_one_mdblist_entry(self) -> None:
+        media = Media(
+            id=1,
+            tmdb_id=1396,
+            media_type=MediaType.series,
+            title="Breaking Bad",
+        )
+        db = SimpleNamespace(
+            execute=AsyncMock(
+                side_effect=[
+                    _scalar_result([media]),
+                    _scalar_result([_plex_connection()]),
+                    _rows_result([]),
+                ]
+            ),
+            commit=AsyncMock(),
+        )
+
+        with (
+            patch(
+                "routers.sync._resolve_tmdb_season_ids",
+                AsyncMock(return_value={(1, 1): 3572, (1, 2): 3573}),
+            ),
+            patch("routers.sync.plex.resolve_season_rating_key", AsyncMock(return_value="103")),
+            patch("routers.sync.plex.set_rating", AsyncMock(return_value=True)),
+            patch("routers.sync.trakt_client.remove_ratings_batch", AsyncMock()),
+            patch("core.mdblist.remove_ratings", AsyncMock(return_value={})) as remove_mdblist,
+        ):
+            await _fan_out_changes_to_other_connections(
+                db,
+                user_id=3,
+                exclude_connection_id=None,
+                new_watched_ids=set(),
+                new_ratings={},
+                settings=_settings(),
+                removed_ratings={(1, 1), (1, 2)},
+            )
+
+        payload = remove_mdblist.await_args.args[1]
+        self.assertEqual(len(payload["shows"]), 1)
+        self.assertEqual(payload["shows"][0]["ids"], {"tmdb": 1396})
+        self.assertEqual(
+            sorted(payload["shows"][0]["seasons"], key=lambda s: s["number"]),
+            [{"number": 1}, {"number": 2}],
+        )
+
 
 class SeasonRatingImportTests(unittest.IsolatedAsyncioTestCase):
     async def test_mdblist_import_persists_season_rating_separately(self) -> None:
